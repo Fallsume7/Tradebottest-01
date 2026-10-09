@@ -10,11 +10,14 @@ to any host other than the configured mock-site origin.
 
 from __future__ import annotations
 
+import functools
 import glob
 import logging
 import os
 import re
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, ClassVar
 from urllib.parse import urlparse
 
@@ -60,6 +63,22 @@ def _money(text: str) -> float:
     return float(m.group(0).replace(",", ""))
 
 
+def _on_worker(method):
+    """Run an adapter method on the adapter's dedicated browser thread.
+
+    Playwright's sync API is bound to the thread that started it. The bot calls adapters from its own
+    session thread (and the API from others), so every browser touch is funnelled to ONE worker thread.
+    """
+
+    @functools.wraps(method)
+    def wrapper(self, *args, **kwargs):
+        if threading.get_ident() == self._worker_ident:
+            return method(self, *args, **kwargs)
+        return self._pool.submit(method, self, *args, **kwargs).result()
+
+    return wrapper
+
+
 class MockBrowserAdapter(ExecutionAdapter):
     name: ClassVar[str] = "mock_browser"
     is_real_money: ClassVar[bool] = False
@@ -92,6 +111,8 @@ class MockBrowserAdapter(ExecutionAdapter):
         self._ledger: dict[str, str] = {}  # client_order_id -> external order id (idempotency)
         self._staged: dict[str, PreparedOrder] = {}
         self._before_ids: dict[str, set[str]] = {}
+        self._pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="mock-browser")
+        self._worker_ident: int = self._pool.submit(threading.get_ident).result()
 
     # ------------------------------------------------------------------ browser plumbing
     def _ensure_page(self) -> Any:
@@ -118,6 +139,15 @@ class MockBrowserAdapter(ExecutionAdapter):
         return self._page
 
     def close(self) -> None:
+        if threading.get_ident() != self._worker_ident:
+            try:
+                self._pool.submit(self._close_browser).result(timeout=15)
+            finally:
+                self._pool.shutdown(wait=False)
+            return
+        self._close_browser()
+
+    def _close_browser(self) -> None:
         for obj, meth in ((self._browser, "close"), (self._pw, "stop")):
             try:
                 if obj is not None:
@@ -137,6 +167,7 @@ class MockBrowserAdapter(ExecutionAdapter):
         return page
 
     # ------------------------------------------------------------------ session
+    @_on_worker
     def login(self) -> None:
         page = self._ensure_page()
         page.goto(self.base_url + "/login")
@@ -147,6 +178,7 @@ class MockBrowserAdapter(ExecutionAdapter):
         if page.locator("#login-error").count():
             raise ExecutionError("login failed: " + page.locator("#login-error").inner_text())
 
+    @_on_worker
     def ensure_logged_in(self) -> None:
         try:
             self._goto("/portfolio")
@@ -154,6 +186,7 @@ class MockBrowserAdapter(ExecutionAdapter):
             log.info("mock site session expired; logging in again")
             self.login()
 
+    @_on_worker
     def check_session(self) -> SessionStatus:
         try:
             self._goto("/portfolio")
@@ -164,6 +197,7 @@ class MockBrowserAdapter(ExecutionAdapter):
             return SessionStatus(self.name, False, None, f"unreachable: {exc}")
 
     # ------------------------------------------------------------------ reads
+    @_on_worker
     def get_buying_power(self) -> float:
         page = self._goto("/portfolio")
         return _money(
@@ -171,6 +205,7 @@ class MockBrowserAdapter(ExecutionAdapter):
             or page.locator("#buying-power").inner_text()
         )
 
+    @_on_worker
     def get_holdings(self) -> list[Holding]:
         page = self._goto("/portfolio")
         rows = page.eval_on_selector_all(
@@ -179,6 +214,7 @@ class MockBrowserAdapter(ExecutionAdapter):
         return [Holding(r["s"], int(r["q"]), float(r["a"])) for r in rows]
 
     # ------------------------------------------------------------------ orders
+    @_on_worker
     def prepare_order(self, request: OrderRequest) -> PreparedOrder:
         """Fill in the order form and reach the confirmation page WITHOUT confirming."""
         # Snapshot existing order ids first: needed to detect an order whose submission outcome is unknown.
@@ -205,6 +241,7 @@ class MockBrowserAdapter(ExecutionAdapter):
         self._staged[request.client_order_id] = prepared
         return prepared
 
+    @_on_worker
     def submit_order(self, prepared: PreparedOrder) -> ExternalOrder:
         cid = prepared.request.client_order_id
         if cid in self._ledger:  # idempotent: never click confirm twice for the same client id
@@ -268,6 +305,7 @@ class MockBrowserAdapter(ExecutionAdapter):
             pass
         return None
 
+    @_on_worker
     def get_order_status(self, external_id: str) -> ExternalOrder:
         for o in self._read_orders():
             if o["id"] == external_id:
@@ -282,6 +320,7 @@ class MockBrowserAdapter(ExecutionAdapter):
                 )
         raise ExecutionError(f"order {external_id} not found on venue")
 
+    @_on_worker
     def cancel_order(self, external_id: str) -> bool:
         page = self._goto("/orders")
         btn = page.locator(f"tr.order[data-order-id='{external_id}'] .cancel-btn")
@@ -291,6 +330,7 @@ class MockBrowserAdapter(ExecutionAdapter):
         page.wait_for_load_state()
         return self.get_order_status(external_id).status == OrderStatus.CANCELED
 
+    @_on_worker
     def wait_for_terminal(
         self, external_id: str, timeout_s: float = 10.0, poll_s: float = 0.25
     ) -> ExternalOrder:

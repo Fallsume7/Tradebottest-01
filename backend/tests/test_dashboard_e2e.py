@@ -5,7 +5,6 @@ Set MWBOT_SCREENSHOTS=1 to regenerate docs/screenshots/*.png.
 """
 
 import os
-import re
 import threading
 import time
 from pathlib import Path
@@ -88,7 +87,7 @@ def test_dashboard_full_workflow(server, browser):
     expect(page.get_by_test_id("decision-feed")).to_be_visible()
     shot(page, "overview")
     equity_text = page.get_by_test_id("stat-equity").inner_text()
-    assert equity_text != "$100,000.00" or svc.broker.trades == []   # state in the UI reflects the backend
+    assert equity_text != "$100,000.00" or svc.broker.trades == []  # state in the UI reflects the backend
 
     # scanner: presets + score breakdown
     page.get_by_role("link", name="Scanner").first.click()

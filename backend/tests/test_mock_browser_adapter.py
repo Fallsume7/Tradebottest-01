@@ -260,3 +260,26 @@ def test_bot_pauses_when_venue_rejects_a_mirrored_order(mock_site):
         assert not ex.orders or all(o.status == "rejected" for o in ex.orders.values())
     finally:
         ad.close()
+
+
+def test_adapter_can_be_used_from_a_different_thread_than_the_one_that_created_it(adapter):
+    """Regression: Playwright objects are thread-bound; the bot's session thread is not the creating thread."""
+    import threading
+
+    ad, ex = adapter
+    ad.login()  # created/initialised on the test thread
+    out: dict[str, object] = {}
+
+    def other_thread():
+        try:
+            out["bp"] = ad.get_buying_power()
+            out["order"] = ad.submit_order(ad.prepare_order(buy(qty=3, cid="threaded")))
+            out["holdings"] = ad.get_holdings()
+        except Exception as exc:  # pragma: no cover - failure path is asserted below
+            out["error"] = repr(exc)
+
+    t = threading.Thread(target=other_thread)
+    t.start()
+    t.join(30)
+    assert "error" not in out, out
+    assert out["order"].status == OrderStatus.FILLED and out["holdings"][0].quantity == 3
