@@ -4,6 +4,10 @@
 
 The rest of the bot works without MarketWatch. This document lists exactly what remains.
 
+## Eligibility (what the game offers)
+
+The game does not offer every U.S. stock, so availability is a first-class concept (`docs/ELIGIBILITY.md`): three states, a dated list you maintain by hand or CSV, game rules, and point-in-time use in replays. The future local integration plugs into `mwbot/eligibility/verifier.py::EligibilityVerifier` (`verify(ticker) -> VerificationResult`); `apply_verification` turns results into audited records and never records "could not determine" as a fact. Nothing here contacts MarketWatch, and any automated checking needs the permission gate below, your own logged-in browser on your own machine, and rate limits you choose.
+
 ## 0. Gate: permission and rules (do this first, on your side)
 
 1. **Read the MarketWatch / Dow Jones terms of use** and the rules of *your* game. Automated or scripted interaction may be restricted. If it is unclear, ask the game's organiser and, where required, the site owner for permission. If the answer is "no", stop here — keep using the local paper engine and place orders by hand using the dashboard's suggestions.

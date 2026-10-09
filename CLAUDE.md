@@ -14,27 +14,32 @@ A **paper-trading** system for a friends' virtual-stock competition: scanner →
 6. **Timestamps are tz-aware UTC internally**, Chicago only for display. Naive datetimes are rejected.
 7. **No secrets in git.** Keys live in `.env` (ignored). Never log query strings with keys (`_safe` in `data/http.py`). The dashboard must not ask for or store keys.
 8. Do not claim a strategy is profitable. Synthetic results are labelled as such everywhere.
+9. **Eligibility is a core rule.** Only stocks marked *confirmed tradable* in the user's list (and passing game rules) may be recommended or bought; unverified = research only; unavailable = never. Never infer availability from exchange listing or data coverage. Eligibility gates entries only - it must never block exiting a holding. Replays/backtests use the list *as of each date*; "not applied" must stay explicit and labelled. Tests: `test_eligibility.py`, `test_scanner_eligibility.py`, `test_opportunity_bot.py`.
+10. **Forecasts are estimates.** Only a model that passed the out-of-sample criteria (`forecast/calibration.py`, ≥ 10 test sessions) may be labelled validated/calibrated; the heuristic never is. No LLM predictions. No look-ahead in features, training or history patterns. Aggressive mode may risk more per trade but must keep stop-losses, the daily loss limit and end-of-day exits.
+11. Open positions keep the plan they were opened with when settings or mode change (unless the user chose `tighten_only`); changing settings must never silently close positions.
 
 ## Commands (repo root; venv active)
 ```bash
 pip install -e "backend[dev]" && python -m playwright install chromium
 ruff check backend && ruff format --check backend && (cd backend && mypy mwbot)
-(cd backend && python -m pytest -m "not browser")     # ~4 min
+pip install -e "backend[ml]"                          # optional: scikit-learn gradient-boosted forecaster
+(cd backend && python -m pytest -m "not browser")     # ~10 min
 (cd backend && python -m pytest -m browser)           # needs frontend/dist built + chromium
 (cd frontend && npm ci && npm run typecheck && npm test && npm run build)
 mwbot serve                                           # API + dashboard on :8000
-mwbot demo-day --date 2026-10-08                      # headless synthetic day
+mwbot demo-day --date 2026-10-07                      # headless synthetic day (made-up stock list, labelled)
 mwbot backtest --dataset synthetic_sample --oos 0.3 --out reports/
 MWBOT_SCREENSHOTS=1 python -m pytest backend/tests/test_dashboard_e2e.py   # regenerate docs/screenshots
 ```
 Run ruff format + ruff check + mypy before committing (CI enforces them).
 
 ## Map
-`domain.py` types · `config.py` settings · `calendar.py` NYSE sessions/schedule · `data/` providers (synthetic, csv, massive) · `scanner/` metrics+score · `strategies/` (A–E) · `trading/` fills, broker, risk · `bot/` engine (tick), runner, report · `backtest/` · `execution/` adapters (+`marketwatch.py` skeleton) · `mocksite/` fake venue · `db/` · `service.py` (AppService) · `api/app.py` · `cli.py`. Full detail: `docs/ARCHITECTURE.md`.
+`domain.py` types · `config.py` settings · `calendar.py` NYSE sessions/schedule · `data/` providers (synthetic, csv, massive) · `scanner/` metrics+score · `strategies/` (`expected_opportunity` + classic A–E) · `eligibility/` · `forecast/` · `settings_schema.py` · `trading/` fills, broker, risk · `bot/` engine (tick), runner, report · `backtest/` · `execution/` adapters (+`marketwatch.py` skeleton) · `mocksite/` fake venue · `db/` · `service.py` (AppService) · `api/app.py` · `cli.py`. Full detail: `docs/ARCHITECTURE.md`.
 
 ## Conventions
 * Type-hinted, `from __future__ import annotations`, ruff (line length 110) + mypy clean. Pydantic for config/API, dataclasses (often `slots=True`) for hot-path domain objects.
 * Tests live in `backend/tests`; build price paths with `tests/conftest.py::build_day` and `tests/scenarios.py`; a new strategy gets positive/negative/exit tests plus the automatic "tiny history" parametrised test.
+* Settings: add a field once in `settings_schema.py::FIELDS` (bounds, help, effect); the UI, server validation, preview, reset and import/export follow. Use `mode.` paths for per-mode values.
 * Frontend: strict TS, Tailwind tokens (`bg-panel`, `text-muted`, `text-up/down`), data via `src/api.ts`; mock fetch with `src/test/fixtures.ts::mockApi` (unmocked calls fail the test).
 * Keep the UI honest: show "-" for missing values, label feed kind, show errors from the API (`ErrorBanner`).
 

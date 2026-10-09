@@ -49,7 +49,7 @@ export function usePoll<T>(fn: () => Promise<T>, intervalMs: number | null, deps
 }
 
 export function useHashRoute(): [string, (r: string) => void] {
-  const read = () => window.location.hash.replace(/^#\/?/, "") || "overview";
+  const read = () => window.location.hash.replace(/^#\/?/, "") || "dashboard";
   const [route, setRoute] = useState(read);
   useEffect(() => {
     const onHash = () => setRoute(read());

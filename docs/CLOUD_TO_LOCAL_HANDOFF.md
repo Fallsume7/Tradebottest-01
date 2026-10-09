@@ -9,16 +9,21 @@ Written at the end of the cloud session. Statuses are strict: **tested** means a
 | Project | Backend `backend/mwbot`, dashboard `frontend/`, docs, Windows scripts, CI workflow, `.env.example`, secret-safe `.gitignore` |
 | Data modes | Demo (deterministic synthetic market) · Historical (CSV/CSV.GZ replay with validation) · Connected (Massive/Polygon-style provider with retry/backoff/rate-limit/subscription handling) |
 | Scanner | All requested criteria; 3 presets; dashboard-editable filters; per-component score breakdown + reasons/cautions/blockers; missing-data policy |
-| Strategies | A Opening Momentum, B Gap Continuation, C Momentum Breakout, D Volume Surge, E Custom Weighted — common interface, explanations, parameters |
+| MarketWatch eligibility | Three states, dated SQLite history, CSV import/export, game rules, point-in-time use in replays/backtests, holdings never trapped, verifier *interface* (skeleton only). `docs/ELIGIBILITY.md` |
+| Predictive strategy | `expected_opportunity` (default): features → forecast → per-trade target/stop/deadline → gates → ranking; smart exits; rotation + turnover controls; **Maximum Expected Return** (default) and **Aggressive Upside** presets with live switching. `docs/PREDICTIVE_STRATEGY.md` |
+| Forecast framework | Rule-based baseline, ridge regression, optional GBM, isotonic calibration, walk-forward evaluation with strict "validated" criteria, baselines; labelled estimates everywhere |
+| Strategies | Classic A Opening Momentum, B Gap Continuation, C Momentum Breakout, D Volume Surge, E Custom Weighted (kept for comparison; also eligibility-gated) |
 | Virtual broker | Market/limit, partial fills, IOC/day, halts, spread/slippage/impact/latency/commission, idempotent ids, state machine, sizing, stop/target/trailing/time exits, daily-loss limit, position caps, entry cutoff, EOD liquidation with honest failure reporting, pause + emergency stop |
 | Calendar/schedule | Real NYSE calendar, DST/early-close handling, all milestone times configurable, Chicago display, APScheduler live-clock loop (opt-in) |
-| Backtester | Same-code-path replay, next-bar fills, costs, OOS split, warnings, reproducible hash, CSV export, comparison, saved runs |
+| Backtester | Same-code-path replay, next-bar fills, costs, OOS split, warnings, reproducible hash, CSV export, comparison, saved runs; point-in-time eligibility, exit mix, forecast accuracy, mode comparison + baselines, walk-forward model check |
 | Persistence | SQLite (orders, fills, positions, trades, equity, decisions, reports, backtests, settings), restart recovery |
-| Dashboard | 8 pages, dark/light, responsive, live polling, controls, backtest UI, error banners |
+| Dashboard | Dashboard · Opportunities · Portfolio · Strategy Lab · Trade History · Settings; explanation drawers; Start/Pause/Stop/Emergency; mode switch; settings schema UI (validation both sides, preview of effects, reset to recommended, import/export, saved indicators); dark/light; desktop/tablet/phone; loading/empty/error states; confirmations |
 | Execution adapters | `PaperBroker` (full), `MockBrowserAdapter` + mock trading website (full, test-only), `MarketWatchAdapter` (skeleton that refuses to do anything) |
 | Safeguards | Real-money latch, honest feed labels, stale-data entry block, delayed-feed policy, duplicate prevention, alerts, mirror-failure pause, reconciliation |
 
 ## 2. Tested (cloud sandbox, Linux, Python 3.13 / Node 22)
+
+_Latest numbers (after the eligibility / predictive / two-mode / dashboard work) are in the table below; the older bullet list after it describes the first build and is still true for the parts it names._
 
 | Check | Result |
 |---|---|

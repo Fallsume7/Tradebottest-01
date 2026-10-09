@@ -4,7 +4,7 @@
 
 ```
                     ┌──────────────────────────── React dashboard (frontend/) ───────────────────────────┐
-                    │ Overview · Scanner · Stock · Positions · History · Strategy Lab · Performance · Settings │
+                    │ Dashboard · Opportunities · Portfolio · Strategy Lab · Trade History · Settings (+ explain drawers) │
                     └───────────────────────────────────────────┬───────────────────────────────────────┘
                                                                 │ JSON (polling)         /api/*
 ┌───────────────────────────────────────────────────────────────▼───────────────────────────────────────┐
@@ -42,17 +42,20 @@ Everything runs in one Python process (plus an optional headless Chromium for th
 | `data/csv_provider.py` | Strict CSV loader: tz handling, OHLC validation, duplicate removal, split detection, no-look-ahead derivation of `prev_close`/ADV |
 | `data/massive.py`, `data/http.py` | Massive/Polygon-style REST client: bearer-key header, bounded exponential backoff, `Retry-After`, rate limiter, subscription (403) degradation, dataset downloader |
 | `data/replay.py`, `data/arrays.py` | `ReplaySource` (look-ahead-safe slicing) and NumPy prefix arrays for fast metrics |
-| `scanner/` | `compute_metrics` (pure) → `Scanner` filters + weighted score with per-component explanations |
+| `scanner/` | `compute_metrics` (pure) → `Scanner` filters + weighted score with per-component explanations. Splits *basic* filters (data quality/liquidity) from the classic momentum filters, and attaches the **eligibility check**: only `actionable` = confirmed tradable + game rules |
+| `eligibility/` | `EligibilityRecord` (3 states, dated), `EligibilityUniverse` (point-in-time lookup, explicit "not applied"), game-rule checks, CSV import/export, verifier interface (skeleton), demo seed. See `docs/ELIGIBILITY.md` |
+| `forecast/` | features (no look-ahead), cost model, forecasters (heuristic / ridge / optional GBM), calibration + criteria, trade plan (target/stop/deadline), opportunity ranking + gates, walk-forward evaluation, same-time-of-day history from earlier sessions. See `docs/PREDICTIVE_STRATEGY.md` |
 | `strategies/` | `Strategy` interface (`evaluate_entry` → `Evaluation` with every condition; `evaluate_exit`) and five built-ins |
 | `trading/fills.py` | The fill model (rules below) |
 | `trading/broker.py` | `PaperBroker`: orders, fills, positions, cash, round-trip ledger, idempotency, expiry, `force_flatten` |
 | `trading/risk.py` | Position sizing, hard exit rules, `RiskManager.check_entry` gate, `BotState` |
-| `bot/engine.py` | `TradingBot.tick`, alerts, decision log, mirror hook, end-of-session bookkeeping |
+| `bot/engine.py` | `TradingBot.tick`: rank opportunities, manage exits (target / stop / forecast / deadline / end of day / rotation), entries with turnover controls, game order-type rules, controls (start/pause/stop/flatten/close/emergency), live `apply_settings`, alerts, plain-language activity log |
 | `bot/runner.py`, `bot/report.py` | Minute-stepping `SessionRunner`; daily report (dict + markdown) |
 | `backtest/` | `run_backtest`, `compare_strategies`, metrics, CSV export |
 | `execution/` | Adapter interface + implementations + factory with the paper-only latch |
 | `mocksite/` | Fake virtual-trading website (FastAPI, server-rendered HTML) used to test the browser adapter |
 | `db/` | SQLAlchemy models (`UTCDateTime` type) and `SqlStore` (persist/restore/reset, reports, backtests) |
+| `settings_schema.py` | Every user setting once: control type, bounds, help, recommended value, effect on open positions. Drives the Settings page **and** server-side validation, previews, reset, import/export |
 | `service.py` | `AppService`: owns settings, provider, broker+bot, session thread, scheduler, backtest jobs; produces dashboard read-models |
 | `api/app.py` | REST routes; serves `frontend/dist` if built |
 
@@ -71,9 +74,9 @@ Everything runs in one Python process (plus an optional headless Chromium for th
 2. **Phase** — `schedule.phase_at(now)` ∈ closed · premarket_scan · observing_open · trading · no_new_entries · liquidating · final_check · post_close.
 3. **Data** — `source.contexts_at(now)`; a `DataUnavailableError` becomes a critical alert, never a crash. Feed staleness (`feed_age_seconds`) blocks entries.
 4. **Marks** — held symbols are always priced (fetched individually if absent from the universe).
-5. **Scan** — filters + scores. (`bot.fast=True` in backtests skips scanning outside the entry phase.)
+5. **Scan + rank** — every `scanner_refresh_minutes`: filters + scores, eligibility check, then the Expected Opportunity ranking (features → forecast → plan → gates → utility). (`bot.fast=True` in backtests skips scanning outside the entry phase.)
 6. **Exits** (run in *every* phase, even paused or stale — exits only reduce risk), in priority order: emergency-stop flatten → daily-loss flatten → end-of-day liquidation → hard exits (stop/trailing/target/time, evaluated on the last complete bar's low/high) → the strategy's own exit rule.
-7. **Entries** (only in the `trading` phase, bot `running`, feed permits, loss limit not hit): evaluate each enabled strategy on each tradable symbol; rank passing signals by `strength × (0.5 + score/200)`; pass each through `RiskManager.check_entry`; size; submit.
+7. **Entries** (only in the `trading` phase, bot `running`, feed permits, loss limit not hit): the predictive strategy considers only *actionable* opportunities (confirmed tradable, all gates passed); classic strategies (if enabled) only actionable scan results. Each passes the turnover brakes and `RiskManager.check_entry`, is sized, and submitted (marketable limit if the game has no market orders). A full book may *rotate* the weakest holding if the new idea clearly beats it after costs.
 8. **Persist** — the broker writes account/orders/fills/positions; decisions are logged and stored.
 
 ## 5. The fill model (deterministic, documented)
@@ -103,11 +106,11 @@ The internal `PaperBroker` always decides and records. With `MWBOT_EXECUTION_MOD
 
 ## 8. Persistence
 
-Tables: `kv` (settings, flags), `account`, `orders`, `fills`, `positions`, `trades`, `equity`, `decisions`, `daily_reports`, `backtests`. Datetimes are stored as naive UTC and always returned tz-aware (`UTCDateTime`; naive input is refused). WAL mode is enabled. `SqlStore.reset_account()` wipes trading state but not settings.
+Tables: `eligibility` (dated history), `kv` (settings, flags, saved model, latest comparison/model check), `account`, `orders`, `fills`, `positions`, `trades`, `equity`, `decisions`, `daily_reports`, `backtests`. Datetimes are stored as naive UTC and always returned tz-aware (`UTCDateTime`; naive input is refused). WAL mode is enabled. `SqlStore.reset_account()` wipes trading state but not settings.
 
 ## 9. Frontend
 
-Vite + React 18 + TypeScript (strict) + Tailwind 4. No router library (hash routes), no state library: `usePoll` hooks against the typed `api.ts`. Charts: `lightweight-charts` (candles/volume/VWAP, equity) and Recharts (daily returns). CSS-variable tokens implement dark (default) and light themes. Layout: sidebar on desktop, scrolling bottom navigation on phones.
+Vite + React 18 + TypeScript (strict) + Tailwind 4. No router library (hash routes), no state library: `usePoll` hooks against the typed `api.ts`. Shared kit in `components/kit.tsx` (toasts, confirm dialogs, drawer, tooltips, loading/error states, persisted UI preferences). The Settings page is generated from `/api/settings/schema`; edits are collected as pending changes, previewed (`/settings/preview`), validated in the browser and again on the server, then saved. Charts: `lightweight-charts` (candles/volume/VWAP, equity) and Recharts (daily returns). CSS-variable tokens implement dark (default) and light themes. Layout: sidebar on desktop, scrolling bottom navigation on phones.
 
 ## 10. Key decisions and trade-offs
 

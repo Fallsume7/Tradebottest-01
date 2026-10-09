@@ -7,15 +7,19 @@ A **paper-trading** research bot for a friendly virtual-stock-market competition
 > * **Nothing here is investment advice**, and no strategy is claimed to make money. Results on the bundled sample data are on **fabricated (synthetic) prices** and demonstrate the machinery only.
 > * **MarketWatch is not connected yet.** The MarketWatch adapter is a documented, intentionally non-functional skeleton. See [docs/MARKETWATCH_INTEGRATION.md](docs/MARKETWATCH_INTEGRATION.md).
 
-![Overview](docs/screenshots/overview.png)
+![Dashboard](docs/screenshots/dashboard_running.png)
 
-| Scanner (transparent scoring) | Stock detail (chart + strategy conditions) |
+| Why the bot likes (or doesn't like) a stock | Settings with plain-language help |
 |---|---|
-| ![Scanner](docs/screenshots/scanner.png) | ![Stock](docs/screenshots/stock.png) |
+| ![Explanation](docs/screenshots/explain_drawer.png) | ![Settings](docs/screenshots/settings.png) |
 
-| Strategy Lab (backtests) | Phone layout |
+| Opportunities with MarketWatch eligibility | Strategy Lab: mode comparison |
 |---|---|
-| ![Strategy Lab](docs/screenshots/strategy-lab.png) | ![Mobile](docs/screenshots/mobile.png) |
+| ![Opportunities](docs/screenshots/opportunities.png) | ![Strategy Lab](docs/screenshots/strategy_lab.png) |
+
+## The idea in one paragraph
+
+Press **Start**. The recommended **Maximum Expected Return** mode needs no configuration: every couple of minutes it re-ranks the stocks **confirmed available in your MarketWatch game** by *expected return after costs for the time left today* (not by how much they already gained), buys the best one that clears all its checks, gives each position its own profit target, stop and deadline, and sells early on target, on a bad forecast, or before the close. Click anything to see *why*. **Aggressive Upside** is a second preset of the same engines for more variance and bigger positions - same safety limits. Forecasts are labelled **"Estimate - not validated"** unless an out-of-sample test passed; synthetic, historical and real data are always labelled.
 
 ## What it does
 
@@ -23,11 +27,13 @@ A **paper-trading** research bot for a friendly virtual-stock-market competition
 |---|---|
 | Data | **Demo** (deterministic synthetic market, no keys) · **Historical** (CSV/CSV.GZ replay with strict validation) · **Connected** (Massive/Polygon-style REST, bring your own key, honest *delayed* vs *real-time* labels) |
 | Scanner | % change, premarket, volume, RVOL, price, market cap, volatility, spread, 5/15-min momentum, VWAP distance, distance from high, liquidity, halts, abnormal data. Three presets (penny / small-cap momentum / broad). Every score is broken down per component with plain-English reasons; missing data is *marked unavailable*, never invented |
-| Strategies | A Opening Momentum · B Premarket Gap Continuation · C Momentum Breakout · D Volume Surge · E Custom Weighted. Each lists entry/exit/risk rules, explains every decision condition-by-condition, and has tunable parameters |
+| MarketWatch eligibility | Three states (confirmed tradable / confirmed unavailable / unverified), dated history in SQLite, CSV import/export, game rules (min price, order types, limits, commissions). **Only confirmed-tradable stocks are ever recommended or bought**; unverified ones are research-only; held stocks are never trapped. See [docs/ELIGIBILITY.md](docs/ELIGIBILITY.md) |
+| Predictive strategy | Expected Opportunity ranking, per-trade target/stop/deadline, smart exits, rotation with turnover controls, two modes, forecast framework with calibration checks and walk-forward evaluation. See [docs/PREDICTIVE_STRATEGY.md](docs/PREDICTIVE_STRATEGY.md) |
+| Classic strategies | A Opening Momentum · B Premarket Gap Continuation · C Momentum Breakout · D Volume Surge · E Custom Weighted. Each lists entry/exit/risk rules, explains every decision condition-by-condition, and has tunable parameters |
 | Virtual broker | Market/limit orders, partial fills, IOC/day orders, halts, spread + slippage + size impact, latency, commissions, idempotent order ids, strict order state machine, stop/target/trailing/time exits, sizing, daily-loss limit, position caps, entry cutoff, end-of-day liquidation that **reports honestly when it fails**, pause + emergency stop |
 | Calendar | Real NYSE calendar (`exchange_calendars`): holidays, early closes, DST. Dashboard in America/Chicago |
 | Backtester | Replays the *same* bot code as live simulation; next-bar fills; costs; in/out-of-sample split; sample-size warnings; reproducible result hash; CSV export; strategy comparison |
-| Dashboard | React + TypeScript + Tailwind; Overview, Scanner, Stock Detail, Positions, History, Strategy Lab, Performance, Settings; dark by default; responsive |
+| Dashboard | React + TypeScript + Tailwind; **Dashboard, Opportunities, Portfolio, Strategy Lab, Trade History, Settings**; dark by default; desktop/tablet/phone; start/pause/stop/emergency controls; mode switch; explanation drawers; settings generated from one server-validated schema (reset to recommended, import/export) |
 | Execution adapters | `PaperBroker` (fully functional) · `MockBrowserAdapter` (Playwright vs a bundled fake trading site: login, preview/confirm, delays, rejections, session expiry, reconciliation) · `MarketWatchAdapter` (skeleton only) |
 | Reliability | Structured logs, bounded exponential backoff, rate limiting, freshness checks (stale feed blocks entries), SQLite persistence + restart recovery, visible alerts |
 
@@ -48,13 +54,14 @@ cp .env.example .env                                         # optional: everyth
 mwbot serve                                                  # http://127.0.0.1:8000
 ```
 
-Open the dashboard → **Overview → Start session** (pick "Instant" to run a whole synthetic trading day in seconds, or "Watch it" to stream it).
+Open the dashboard → press **Start** (top right). Demo mode streams a synthetic trading day with a made-up stock list; choose "Instant" under *Dashboard → Mode & session* to run a whole day in seconds. Nothing needs configuring.
 
 Headless alternatives:
 
 ```bash
-mwbot demo-day --date 2026-10-08            # one full synthetic day, prints the daily report
+mwbot demo-day --date 2026-10-07            # one full synthetic day, prints the daily report
 mwbot backtest --dataset synthetic_sample --oos 0.3 --out reports/   # reproducible backtest + CSV export
+mwbot backtest --dataset synthetic_sample --compare-modes            # both modes + momentum baseline, identical data
 mwbot make-sample-data --out backend/sample_data/synthetic_sample    # regenerate the labelled synthetic dataset
 ```
 
@@ -73,6 +80,8 @@ ruff check backend && ruff format --check backend
 | Doc | Contents |
 |---|---|
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Components, data flow, the timing/fill model, design decisions |
+| [docs/ELIGIBILITY.md](docs/ELIGIBILITY.md) | MarketWatch availability: states, game rules, CSV, point-in-time use, holdings |
+| [docs/PREDICTIVE_STRATEGY.md](docs/PREDICTIVE_STRATEGY.md) | Ranking, forecasts, plans, exits, the two modes, honesty rules |
 | [docs/STRATEGIES.md](docs/STRATEGIES.md) | Every strategy's rules, parameters, assumptions and limits |
 | [docs/BACKTESTING.md](docs/BACKTESTING.md) | Running backtests, reading results, bias protections, known limits |
 | [docs/MARKETWATCH_INTEGRATION.md](docs/MARKETWATCH_INTEGRATION.md) | What must be researched/authorised/built locally to connect MarketWatch |
@@ -83,8 +92,8 @@ ruff check backend && ruff format --check backend
 ## Layout
 
 ```
-backend/mwbot/        Python package (domain, calendar, data/, scanner/, strategies/, trading/, bot/, backtest/, execution/, mocksite/, db/, api/, service.py, cli.py)
-backend/tests/        259 tests (unit, integration, API, Playwright)
+backend/mwbot/        Python package (domain, calendar, data/, eligibility/, forecast/, scanner/, strategies/, trading/, bot/, backtest/, execution/, mocksite/, db/, api/, service.py, cli.py)
+backend/tests/        unit, integration, API and Playwright tests (counts in the handoff doc)
 backend/sample_data/  labelled SYNTHETIC minute-bar dataset (10 sessions x 30 symbols)
 frontend/             Vite + React + TypeScript + Tailwind dashboard (+ vitest suite)
 docs/                 documentation, screenshots, demo outputs
@@ -99,3 +108,5 @@ scripts/              Windows PowerShell helpers
 * The Massive provider follows the documented Polygon-compatible schema but was **not verified against the live service** from the build sandbox.
 * RVOL is an estimate (average daily volume × a standard intraday curve) unless you supply per-minute historicals.
 * Long-only, cash account (no shorting or margin).
+* Forecasts are rule-of-thumb estimates unless the Strategy Lab model check says otherwise; on bar-only data the assumed spread (40 bps) usually exceeds the modelled edge, so the default mode trades rarely there. See docs/PREDICTIVE_STRATEGY.md.
+* Automatic MarketWatch availability checking is **not implemented** (it needs your permission and your own browser); you maintain the stock list by hand or CSV.

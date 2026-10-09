@@ -1,10 +1,13 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { useApp } from "../App";
 import { api } from "../api";
-import { EquityChart } from "../components/charts";
+import { CompareChart, EquityChart, type NamedLine } from "../components/charts";
+import { Loading, Segmented, usePref, useToast } from "../components/kit";
+import { DataKindBadge, EstimateBadge } from "../components/trading";
 import { Badge, Button, Card, Empty, ErrorBanner, Field, PnL, Progress, Select, TextInput, Toggle } from "../components/ui";
 import { chicagoTime, money, num, pct, signedMoney } from "../format";
 import { usePoll } from "../hooks";
-import type { BacktestResult, ParamSchema, StrategyInfo, Trade } from "../types";
+import type { BacktestResult, ComparePayload, Job, ModelCheckPayload, ParamSchema, StrategyInfo, Trade } from "../types";
 
 // ---------------------------------------------------------------- parameter editor
 function bounds(s: ParamSchema): { min?: number; max?: number; nullable: boolean; integer: boolean; bool: boolean } {
@@ -91,6 +94,14 @@ function ResultView({ r }: { r: BacktestResult }) {
         {metric("Final equity", money(s.final_equity, 0))}
       </div>
       {s.ratios_note && <p className="mt-2 text-[11px] text-muted">{s.ratios_note}</p>}
+      {s.eligibility && <p className="mt-2 text-[11px] text-muted">{s.eligibility.applied ? `MarketWatch stock list applied point-in-time (${s.eligibility.n_tickers ?? "?"} tickers).` : s.eligibility.note}</p>}
+      {s.exits && s.exits.counts && Object.keys(s.exits.counts).length > 0 && (
+        <div className="mt-3 flex flex-wrap gap-2 text-xs" data-testid="bt-exits">
+          {Object.entries(s.exits.counts).map(([k, n]) => <Badge key={k} color={k === "target" ? "up" : k === "risk" ? "down" : "muted"}>{s.exits?.labels[k] ?? k}: {n}</Badge>)}
+          {s.exits.target_hit_rate !== null && <span className="text-muted">target hit {(s.exits.target_hit_rate * 100).toFixed(0)}% · stops {((s.exits.stop_rate ?? 0) * 100).toFixed(0)}% · end of day {((s.exits.end_of_day_rate ?? 0) * 100).toFixed(0)}%</span>}
+        </div>
+      )}
+      {s.forecast_accuracy && s.forecast_accuracy.n > 0 && <p className="mt-2 text-[11px] text-muted" data-testid="bt-forecast-accuracy">Forecast vs result over {s.forecast_accuracy.n} trades: predicted {pct(s.forecast_accuracy.mean_predicted_net_pct ?? null)} vs realised {pct(s.forecast_accuracy.mean_realised_net_pct ?? null)} per trade{s.forecast_accuracy.correlation != null ? ` · correlation ${num(s.forecast_accuracy.correlation)}` : ""}. {s.forecast_accuracy.note}</p>}
       {s.in_sample && s.out_of_sample && (
         <div className="mt-3 grid gap-2 text-xs sm:grid-cols-2">
           {([["In-sample (earlier days)", s.in_sample], ["Out-of-sample (held-out later days)", s.out_of_sample]] as const).map(([t, b]) => (
@@ -124,172 +135,268 @@ function ResultView({ r }: { r: BacktestResult }) {
   );
 }
 
-// ---------------------------------------------------------------- page
-export default function StrategyLab() {
-  const { data: strategies, reload: reloadStrategies, error } = usePoll(api.strategies, null);
-  const { data: datasets } = usePoll(api.datasets, null);
-  const { data: past, reload: reloadPast } = usePoll(api.backtests, null);
-  const [enabled, setEnabled] = useState<string[] | null>(null);
-  const [edits, setEdits] = useState<Record<string, Record<string, number | boolean | string | null>>>({});
-  const [saving, setSaving] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
-
-  // backtest form
-  const [dataset, setDataset] = useState("synthetic_sample");
-  const [sel, setSel] = useState<string[]>(["opening_momentum", "gap_continuation"]);
-  const [compare, setCompare] = useState(true);
-  const [oos, setOos] = useState(30);
-  const [capital, setCapital] = useState("100000");
-  const [slip, setSlip] = useState("5");
-  const [from, setFrom] = useState("");
-  const [to, setTo] = useState("");
+// ---------------------------------------------------------------- shared job polling
+function useJob() {
   const [job, setJob] = useState<{ id: string; progress: number; status: string; message: string } | null>(null);
-  const [results, setResults] = useState<BacktestResult[]>([]);
   const timer = useRef<ReturnType<typeof setTimeout>>();
-
   useEffect(() => () => clearTimeout(timer.current), []);
-  const en = enabled ?? strategies?.filter((s) => s.enabled).map((s) => s.id) ?? [];
-  const ds = datasets?.find((d) => d.id === dataset);
-  const dates = ds?.dates ?? [];
-
-  const save = async (id?: string) => {
-    setSaving(true);
-    setErr(null);
-    try {
-      await api.saveSettings({ strategies: { enabled: en, params: id ? { [id]: edits[id] } : edits } });
-      setEdits(id ? Object.fromEntries(Object.entries(edits).filter(([k]) => k !== id)) : {});
-      setEnabled(null);
-      reloadStrategies();
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e));
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const poll = async (id: string) => {
-    try {
-      const j = await api.job(id);
-      setJob({ id, progress: j.progress, status: j.status, message: j.message });
-      if (j.status === "done") {
-        const rs = await Promise.all(j.result_ids.map((rid) => api.backtest(rid)));
-        setResults(rs);
-        reloadPast();
-      } else if (j.status === "error") {
-        setErr(`Backtest failed: ${j.error}`);
-      } else {
-        timer.current = setTimeout(() => void poll(id), 700);
+  const watch = (id: string, onDone: (j: Job) => void, onError: (m: string) => void) => {
+    const tick = async () => {
+      try {
+        const j = await api.job(id);
+        setJob({ id, progress: j.progress, status: j.status, message: j.message });
+        if (j.status === "done") onDone(j);
+        else if (j.status === "error") onError(j.error);
+        else timer.current = setTimeout(() => void tick(), 800);
+      } catch (e) {
+        onError(e instanceof Error ? e.message : String(e));
       }
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e));
-    }
+    };
+    setJob({ id, progress: 0, status: "queued", message: "" });
+    void tick();
   };
+  return { job, watch, busy: job !== null && (job.status === "queued" || job.status === "running") };
+}
 
+const COLORS: Record<string, string> = { max_expected_return: "#2dd4bf", aggressive_upside: "#f59e0b", baseline_momentum: "#8b98a8" };
+const pctOrDash = (v: number | null | undefined, d = 0) => (v === null || v === undefined ? "-" : `${(v * 100).toFixed(d)}%`);
+
+// ---------------------------------------------------------------- compare modes
+function CompareView({ c }: { c: ComparePayload }) {
+  const lines: NamedLine[] = useMemo(() => Object.entries(c.equity_curves).map(([k, pts]) => ({
+    name: c.rows.find((r) => r.mode === k)?.label ?? k, color: COLORS[k] ?? "#60a5fa",
+    points: pts.map(([t, v]) => ({ time: Math.floor(new Date(t).getTime() / 1000), value: v })),
+  })), [c]);
+  return (
+    <Card title="Result" right={<div className="flex gap-2"><DataKindBadge kind={c.same_data.feed.kind} /><Badge color="muted">{c.same_data.n_days} days</Badge></div>}>
+      <div className="mb-3 rounded-lg bg-panel2 px-3 py-2 text-[13px]" data-testid="verdict">{c.verdict}</div>
+      <div className="overflow-x-auto">
+        <table className="w-full min-w-[720px] text-[13px]" data-testid="compare-table">
+          <thead className="text-left text-[10px] uppercase tracking-wider text-muted"><tr><th className="py-2">Strategy</th><th className="text-right">Return</th><th className="text-right">Worst drawdown</th><th className="text-right">Win rate</th><th className="text-right">Avg trade</th><th className="text-right">Trades</th><th className="text-right">Target hit</th><th className="text-right">Stopped</th><th className="text-right">End of day</th></tr></thead>
+          <tbody>
+            {c.rows.map((r) => (
+              <tr key={r.mode} className="border-t border-line">
+                <td className="py-2 font-medium"><span className="mr-2 inline-block h-2 w-2 rounded-full" style={{ background: COLORS[r.mode] ?? "#60a5fa" }} />{r.label}</td>
+                <td className="text-right"><PnL value={r.total_return_pct} text={pct(r.total_return_pct)} /></td>
+                <td className="num text-right text-down">{r.max_drawdown_pct == null ? "-" : pct(-r.max_drawdown_pct, 2, false)}</td>
+                <td className="num text-right">{pctOrDash(r.win_rate)}</td>
+                <td className="num text-right">{r.avg_return_pct == null ? "-" : pct(r.avg_return_pct)}</td>
+                <td className="num text-right">{r.n_trades ?? "-"}</td>
+                <td className="num text-right">{pctOrDash(r.target_hit_rate)}</td>
+                <td className="num text-right">{pctOrDash(r.stop_rate)}</td>
+                <td className="num text-right">{pctOrDash(r.end_of_day_rate)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {c.rows.some((r) => r.out_of_sample) && (
+        <p className="mt-2 text-xs text-muted">Out-of-sample (held-out later days): {c.rows.filter((r) => r.out_of_sample).map((r) => `${r.label} ${pct(r.out_of_sample?.total_return_pct ?? null)} (${r.out_of_sample?.n_trades} trades)`).join(" · ")}</p>
+      )}
+      {lines.some((l) => l.points.length > 1) && <div className="mt-3"><CompareChart lines={lines} /></div>}
+      <div className="mt-3 space-y-1" data-testid="compare-warnings">
+        {c.warnings.map((w) => <div key={w} className="flex gap-2 rounded-md bg-warn/10 px-2.5 py-1.5 text-xs text-warn"><span aria-hidden>!</span>{w}</div>)}
+      </div>
+      <p className="mt-3 text-[11px] text-muted">Same data, costs, stock list and forecaster for every row. Weak or negative results are shown as they are - nothing here is tuned to look good and none of it predicts future results.</p>
+    </Card>
+  );
+}
+
+function CompareTab({ latest, datasets }: { latest: ComparePayload | null | undefined; datasets: { id: string; name: string; synthetic: boolean; dates: string[] | null }[] }) {
+  const [dataset, setDataset] = usePref<string>("lab-dataset", "synthetic_sample");
+  const [forecaster, setForecaster] = useState("heuristic");
+  const [elig, setElig] = useState(true);
+  const [oos, setOos] = useState(30);
+  const [res, setRes] = useState<ComparePayload | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const { job, watch, busy } = useJob();
+  const shown = res ?? latest ?? null;
   const run = async () => {
     setErr(null);
-    setResults([]);
-    const body: Record<string, unknown> = {
-      name: compare ? "Strategy comparison" : "Backtest", dataset: dataset === "demo" ? null : dataset, strategies: sel, compare,
-      initial_capital: Number(capital), oos_fraction: oos / 100, costs: { slippage_bps: Number(slip) },
-    };
-    if (dates.length) body.dates = dates.filter((d) => (!from || d >= from) && (!to || d <= to));
+    try {
+      const { job_id } = await api.compareModes({ dataset: dataset === "demo" ? null : dataset, forecaster, eligibility: elig ? "point_in_time" : "none", oos_fraction: oos / 100 });
+      watch(job_id, (j) => setRes(j.payload as ComparePayload), setErr);
+    } catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
+  };
+  return (
+    <div className="space-y-4">
+      <Card title="Maximum Expected Return vs Aggressive Upside">
+        <p className="mb-3 text-[13px] text-muted">Runs both modes (and a simple top-gainer baseline) over the same days with the same costs, so the difference you see comes from the strategy, not the data.</p>
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <Field label="Dataset"><Select aria-label="Comparison dataset" value={dataset} onChange={(e) => setDataset(e.target.value)}>
+            {datasets.map((d) => <option key={d.id} value={d.id}>{d.name}{d.synthetic ? " (SYNTHETIC)" : ""}</option>)}<option value="demo">Demo generator - last 5 days (SYNTHETIC)</option></Select></Field>
+          <Field label="Forecast model" hint="Statistical re-fits every day on EARLIER days only."><Select aria-label="Forecast model" value={forecaster} onChange={(e) => setForecaster(e.target.value)}>
+            <option value="heuristic">Rule-based (recommended)</option><option value="statistical">Statistical (walk-forward)</option></Select></Field>
+          <Field label={`Hold out last ${oos}% of days`} hint="Out-of-sample check. Needs 4+ days."><input type="range" min={0} max={50} step={5} aria-label="Out-of-sample percent" value={oos} onChange={(e) => setOos(Number(e.target.value))} className="w-full accent-[var(--accent)]" /></Field>
+          <label className="flex items-center gap-2 pt-5 text-[13px]"><Toggle checked={elig} onChange={setElig} label="Apply my MarketWatch stock list" />Apply my stock list (as of each date)</label>
+        </div>
+        {!elig && <p className="mt-2 text-xs text-warn">Without the stock list the test may trade stocks your game does not offer. The result will be labelled "eligibility not applied".</p>}
+        <div className="mt-4 flex items-center gap-3">
+          <Button variant="primary" onClick={run} disabled={busy}>{busy ? "Running..." : "Compare the two modes"}</Button>
+          {busy && job && <div className="flex flex-1 items-center gap-3"><Progress value={job.progress} className="max-w-xs" /><span className="text-xs text-muted">{job.message}</span></div>}
+        </div>
+        <ErrorBanner message={err} onClose={() => setErr(null)} />
+      </Card>
+      {shown ? <CompareView c={shown} /> : <Card><Empty>No comparison yet. Run one above - it takes about a minute on the sample dataset.</Empty></Card>}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------- model check
+function ModelCheckTab({ latest, datasets }: { latest: ModelCheckPayload | null | undefined; datasets: { id: string; name: string; synthetic: boolean }[] }) {
+  const [dataset, setDataset] = usePref<string>("lab-dataset", "synthetic_sample");
+  const [res, setRes] = useState<ModelCheckPayload | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const { job, watch, busy } = useJob();
+  const shown = res ?? latest ?? null;
+  const run = async () => {
+    setErr(null);
+    try {
+      const { job_id } = await api.modelCheck({ dataset: dataset === "demo" ? "" : dataset });
+      watch(job_id, (j) => setRes(j.payload as ModelCheckPayload), setErr);
+    } catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
+  };
+  return (
+    <div className="space-y-4">
+      <Card title="Can the forecasts be trusted?">
+        <p className="mb-3 text-[13px] text-muted">Each model is trained only on earlier days and scored on the next day it has never seen (walk-forward). A model is only called <b>validated</b> if its probabilities are accurate, it separates winners from losers, and it was tested over at least 10 separate days. Otherwise forecasts stay labelled as estimates.</p>
+        <div className="flex flex-wrap items-end gap-3">
+          <Field label="Dataset"><Select aria-label="Model check dataset" value={dataset === "demo" ? datasets[0]?.id : dataset} onChange={(e) => setDataset(e.target.value)}>{datasets.map((d) => <option key={d.id} value={d.id}>{d.name}{d.synthetic ? " (SYNTHETIC)" : ""}</option>)}</Select></Field>
+          <Button variant="primary" onClick={run} disabled={busy || datasets.length === 0}>{busy ? "Checking..." : "Run model check"}</Button>
+          {busy && job && <Progress value={job.progress} className="max-w-xs" />}
+        </div>
+        <ErrorBanner message={err} onClose={() => setErr(null)} />
+      </Card>
+      {shown && (shown.ok === false ? <Card><Empty>{shown.reason}</Empty></Card> : (
+        <Card title="Results" right={<DataKindBadge kind={shown.data.feed.kind} />}>
+          <p className="mb-3 text-xs text-muted">{shown.data.note} {shown.n_test_samples} out-of-sample samples over {shown.test_days.length} day(s).</p>
+          <div className="overflow-x-auto"><table className="w-full min-w-[640px] text-[13px]" data-testid="model-table">
+            <thead className="text-left text-[10px] uppercase tracking-wider text-muted"><tr><th className="py-2">Model</th><th className="text-right">Ranking skill*</th><th className="text-right">Top picks vs average</th><th className="text-right">Typical error</th><th>Probabilities</th></tr></thead>
+            <tbody>{Object.entries(shown.models).map(([k, m]) => (
+              <tr key={k} className="border-t border-line align-top"><td className="py-2 font-medium">{k}</td><td className="num text-right">{m.rank_ic === null ? "-" : num(m.rank_ic, 2)}</td>
+                <td className="text-right"><PnL value={m.top_pick_edge_pct} text={m.top_pick_edge_pct === null ? "-" : pct(m.top_pick_edge_pct)} /></td><td className="num text-right">{pct(m.mae_pct, 2, false)}</td>
+                <td className="max-w-[300px]"><EstimateBadge calibrated={m.calibrated} /><div className="mt-1 text-[11px] text-muted">{m.note || m.verdict}</div></td></tr>
+            ))}</tbody></table></div>
+          <p className="mt-2 text-[11px] text-muted">*Rank correlation between predicted and realised returns across stocks at the same moment (0 = no skill). Baselines for comparison: {Object.entries(shown.baselines).map(([k, b]) => `${k.replace(/_/g, " ")} ${b.mean_net_pct === null ? "-" : pct(b.mean_net_pct)}`).join(" · ")}.</p>
+          <div className="mt-3 space-y-1">{shown.warnings.map((w) => <div key={w} className="rounded-md bg-warn/10 px-2.5 py-1.5 text-xs text-warn">{w}</div>)}</div>
+          {shown.saved_model && <p className="mt-2 text-xs text-muted">Trained model saved ({shown.saved_model.calibrated ? "validated" : "not validated"}). Choose "Statistical" under Settings → Trading Strategy → Forecast model to use it.</p>}
+        </Card>
+      ))}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------- backtests (any strategy set)
+function BacktestTab({ datasets, strategies, reloadStrategies }: { datasets: { id: string; name: string; synthetic: boolean; description: string; dates: string[] | null }[]; strategies: StrategyInfo[]; reloadStrategies: () => void }) {
+  const { data: past, reload: reloadPast } = usePoll(api.backtests, null);
+  const [dataset, setDataset] = usePref<string>("lab-dataset", "synthetic_sample");
+  const [sel, setSel] = useState<string[]>(["expected_opportunity"]);
+  const [mode, setMode] = useState("max_expected_return");
+  const [elig, setElig] = useState(true);
+  const [compare, setCompare] = useState(false);
+  const [oos, setOos] = useState(30);
+  const [results, setResults] = useState<BacktestResult[]>([]);
+  const [err, setErr] = useState<string | null>(null);
+  const { job, watch, busy } = useJob();
+  const ds = datasets.find((d) => d.id === dataset);
+  const dates = ds?.dates ?? [];
+  const run = async () => {
+    setErr(null); setResults([]);
+    const body: Record<string, unknown> = { name: compare ? "Strategy comparison" : "Backtest", dataset: dataset === "demo" ? null : dataset, strategies: sel, compare, mode, eligibility: elig ? "point_in_time" : "none", oos_fraction: oos / 100 };
+    if (dates.length) body.dates = dates;
     try {
       const { job_id } = await api.runBacktest(body);
-      setJob({ id: job_id, progress: 0, status: "queued", message: "" });
-      void poll(job_id);
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e));
-    }
+      watch(job_id, async (j) => { setResults(await Promise.all(j.result_ids.map((id) => api.backtest(id)))); reloadPast(); }, (m) => setErr(`Backtest failed: ${m}`));
+    } catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
   };
-
-  const loadPast = async (id: string) => {
-    try {
-      setResults([await api.backtest(id)]);
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e));
-    }
-  };
-
-  const busy = job !== null && (job.status === "queued" || job.status === "running");
   return (
-    <div className="space-y-6">
-      <ErrorBanner message={err ?? error} onClose={() => setErr(null)} />
-
-      <section aria-label="Backtests" className="space-y-4">
-        <Card title="Run a backtest">
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-            <Field label="Dataset" hint={ds?.description}>
-              <Select aria-label="Dataset" value={dataset} onChange={(e) => { setDataset(e.target.value); setFrom(""); setTo(""); }}>
-                {(datasets ?? []).map((d) => <option key={d.id} value={d.id}>{d.name}{d.synthetic ? " (SYNTHETIC)" : ""}</option>)}
-                <option value="demo">Demo generator - last 5 trading days (SYNTHETIC)</option>
-              </Select>
-            </Field>
-            <Field label="From"><Select aria-label="From date" value={from} onChange={(e) => setFrom(e.target.value)} disabled={!dates.length}><option value="">first day</option>{dates.map((d) => <option key={d}>{d}</option>)}</Select></Field>
-            <Field label="To"><Select aria-label="To date" value={to} onChange={(e) => setTo(e.target.value)} disabled={!dates.length}><option value="">last day</option>{dates.map((d) => <option key={d}>{d}</option>)}</Select></Field>
-            <Field label="Starting capital ($)"><TextInput type="number" aria-label="Starting capital" value={capital} onChange={(e) => setCapital(e.target.value)} /></Field>
-            <Field label="Slippage (bps)" hint="Extra cost against you on every market fill."><TextInput type="number" aria-label="Slippage bps" value={slip} onChange={(e) => setSlip(e.target.value)} /></Field>
-            <Field label={`Hold out last ${oos}% of days (out-of-sample)`} hint="Guards against overfitting. Needs ≥4 days."><input type="range" min={0} max={50} step={5} value={oos} aria-label="Out-of-sample percent" onChange={(e) => setOos(Number(e.target.value))} className="w-full accent-[var(--accent)]" /></Field>
-            <div className="sm:col-span-2">
-              <span className="mb-1 block text-xs font-medium text-muted">Strategies</span>
-              <div className="flex flex-wrap gap-x-4 gap-y-1.5">
-                {(strategies ?? []).map((s) => (
-                  <label key={s.id} className="flex items-center gap-1.5 text-[13px]"><input type="checkbox" checked={sel.includes(s.id)} onChange={(e) => setSel(e.target.checked ? [...sel, s.id] : sel.filter((x) => x !== s.id))} />{s.name}</label>
-                ))}
-              </div>
-              <label className="mt-2 flex items-center gap-1.5 text-xs text-muted"><input type="checkbox" checked={compare} onChange={(e) => setCompare(e.target.checked)} />compare: run each strategy separately, plus all together</label>
-            </div>
+    <div className="space-y-4">
+      <Card title="Run a backtest">
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <Field label="Dataset" hint={ds?.description}><Select aria-label="Dataset" value={dataset} onChange={(e) => setDataset(e.target.value)}>
+            {datasets.map((d) => <option key={d.id} value={d.id}>{d.name}{d.synthetic ? " (SYNTHETIC)" : ""}</option>)}<option value="demo">Demo generator - last 5 days (SYNTHETIC)</option></Select></Field>
+          <Field label="Trading mode"><Select aria-label="Backtest mode" value={mode} onChange={(e) => setMode(e.target.value)}><option value="max_expected_return">Maximum Expected Return</option><option value="aggressive_upside">Aggressive Upside</option></Select></Field>
+          <Field label={`Hold out last ${oos}% of days`}><input type="range" min={0} max={50} step={5} value={oos} aria-label="Hold-out percent" onChange={(e) => setOos(Number(e.target.value))} className="w-full accent-[var(--accent)]" /></Field>
+          <label className="flex items-center gap-2 pt-5 text-[13px]"><Toggle checked={elig} onChange={setElig} label="Apply my MarketWatch stock list" />Apply my stock list</label>
+          <div className="sm:col-span-2 lg:col-span-4">
+            <span className="mb-1 block text-xs font-medium text-muted">Strategies</span>
+            <div className="flex flex-wrap gap-x-4 gap-y-1.5">{strategies.map((s) => <label key={s.id} className="flex items-center gap-1.5 text-[13px]"><input type="checkbox" checked={sel.includes(s.id)} onChange={(e) => setSel(e.target.checked ? [...sel, s.id] : sel.filter((x) => x !== s.id))} />{s.name}</label>)}</div>
+            <label className="mt-2 flex items-center gap-1.5 text-xs text-muted"><input type="checkbox" checked={compare} onChange={(e) => setCompare(e.target.checked)} />compare: run each separately, plus all together</label>
           </div>
-          <div className="mt-4 flex items-center gap-3">
-            <Button variant="primary" onClick={run} disabled={busy || sel.length === 0}>{busy ? "Running..." : "Run backtest"}</Button>
-            {busy && job && <div className="flex flex-1 items-center gap-3"><Progress value={job.progress} className="max-w-xs" /><span className="text-xs text-muted">{job.message}</span></div>}
-          </div>
-          <p className="mt-3 text-[11px] text-muted">Backtests replay the same bot used for live simulation, with modelled costs and next-bar fills. Results on synthetic data demonstrate the machinery only; no result guarantees future profit.</p>
+        </div>
+        <div className="mt-4 flex items-center gap-3">
+          <Button variant="primary" onClick={run} disabled={busy || sel.length === 0}>{busy ? "Running..." : "Run backtest"}</Button>
+          {busy && job && <div className="flex flex-1 items-center gap-3"><Progress value={job.progress} className="max-w-xs" /><span className="text-xs text-muted">{job.message}</span></div>}
+        </div>
+        <ErrorBanner message={err} onClose={() => setErr(null)} />
+        <p className="mt-3 text-[11px] text-muted">Backtests replay the same bot used for live simulation, with modelled costs and next-bar fills. Results on synthetic data demonstrate the machinery only; no result guarantees future profit.</p>
+      </Card>
+      {results.length > 1 && (
+        <Card title="Comparison" pad={false}>
+          <table className="w-full text-[13px]" data-testid="bt-compare"><thead className="text-left text-[11px] uppercase text-muted"><tr><th className="px-4 py-2">Run</th><th className="text-right">Return</th><th className="text-right">Trades</th><th className="text-right">Win rate</th><th className="pr-4 text-right">Max DD</th></tr></thead>
+            <tbody>{results.map((r) => <tr key={r.id} className="border-t border-line"><td className="px-4 py-2 font-medium">{r.name.replace(/^.*: /, "")}</td><td className="text-right"><PnL value={r.summary.total_return_pct} text={pct(r.summary.total_return_pct)} /></td><td className="num text-right">{r.summary.n_trades}</td><td className="num text-right">{pctOrDash(r.summary.win_rate)}</td><td className="num pr-4 text-right text-down">{pct(-r.summary.max_drawdown_pct, 2, false)}</td></tr>)}</tbody></table>
         </Card>
+      )}
+      {results.map((r) => <ResultView key={r.id} r={r} />)}
+      {past && past.length > 0 && (
+        <Card title="Saved backtests" pad={false}><ul className="divide-y divide-line text-[13px]">
+          {past.slice(0, 10).map((p) => <li key={p.id} className="flex items-center gap-3 px-4 py-2"><span className="font-medium">{p.name}</span><span className="text-xs text-muted">{p.config.strategies.join(", ")}</span>
+            <PnL className="ml-auto" value={p.summary.total_return_pct} text={pct(p.summary.total_return_pct)} /><Button variant="ghost" onClick={async () => setResults([await api.backtest(p.id)])}>Open</Button></li>)}
+        </ul></Card>
+      )}
+      <ClassicStrategies strategies={strategies} reload={reloadStrategies} />
+    </div>
+  );
+}
 
-        {results.length > 1 && (
-          <Card title="Comparison" pad={false}>
-            <table className="w-full text-[13px]" data-testid="bt-compare">
-              <thead className="text-left text-[11px] uppercase text-muted"><tr><th className="px-4 py-2">Run</th><th className="text-right">Return</th><th className="text-right">vs benchmark</th><th className="text-right">Trades</th><th className="text-right">Win rate</th><th className="text-right">Profit factor</th><th className="pr-4 text-right">Max DD</th></tr></thead>
-              <tbody>
-                {results.map((r) => (
-                  <tr key={r.id} className="border-t border-line">
-                    <td className="px-4 py-2 font-medium">{r.name.replace(/^.*: /, "")}</td>
-                    <td className="text-right"><PnL value={r.summary.total_return_pct} text={pct(r.summary.total_return_pct)} /></td>
-                    <td className="text-right"><PnL value={r.summary.total_return_pct - r.summary.benchmark_return_pct} text={pct(r.summary.total_return_pct - r.summary.benchmark_return_pct)} /></td>
-                    <td className="num text-right">{r.summary.n_trades}</td>
-                    <td className="num text-right">{r.summary.win_rate === null ? "-" : `${(r.summary.win_rate * 100).toFixed(0)}%`}</td>
-                    <td className="num text-right">{r.summary.profit_factor === null ? "-" : num(r.summary.profit_factor)}</td>
-                    <td className="num pr-4 text-right text-down">{pct(-r.summary.max_drawdown_pct, 2, false)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </Card>
-        )}
-        {results.map((r) => <ResultView key={r.id} r={r} />)}
-
-        {past && past.length > 0 && (
-          <Card title="Saved backtests" pad={false}>
-            <ul className="divide-y divide-line text-[13px]">
-              {past.slice(0, 12).map((p) => (
-                <li key={p.id} className="flex items-center gap-3 px-4 py-2"><span className="font-medium">{p.name}</span><span className="text-xs text-muted">{p.config.strategies.join(", ")}</span>
-                  <PnL className="ml-auto" value={p.summary.total_return_pct} text={pct(p.summary.total_return_pct)} /><Button variant="ghost" onClick={() => loadPast(p.id)}>Open</Button></li>
-              ))}
-            </ul>
-          </Card>
-        )}
-      </section>
-
-      <section aria-label="Strategies" className="space-y-4">
-        <div className="flex items-center justify-between"><h2 className="text-sm font-semibold uppercase tracking-wide text-muted">Strategies & parameters</h2>
-          {enabled && <Button variant="primary" onClick={() => save()} disabled={saving}>Save enabled set</Button>}</div>
-        {(strategies ?? []).map((s) => (
+function ClassicStrategies({ strategies, reload }: { strategies: StrategyInfo[]; reload: () => void }) {
+  const toast = useToast();
+  const [edits, setEdits] = useState<Record<string, Record<string, number | boolean | string | null>>>({});
+  const [enabled, setEnabled] = useState<string[] | null>(null);
+  const [saving, setSaving] = useState(false);
+  const en = enabled ?? strategies.filter((s) => s.enabled).map((s) => s.id);
+  const save = async (id?: string) => {
+    setSaving(true);
+    try {
+      await api.saveSettings({ strategies: { enabled: en, params: id ? { [id]: edits[id] } : edits } });
+      setEdits(id ? Object.fromEntries(Object.entries(edits).filter(([k]) => k !== id)) : {}); setEnabled(null); reload(); toast("Strategy settings saved");
+    } catch (e) { toast(e instanceof Error ? e.message : String(e), "error"); } finally { setSaving(false); }
+  };
+  return (
+    <details className="rounded-xl border border-line bg-panel">
+      <summary className="cursor-pointer px-4 py-3 text-[13px] font-semibold">Advanced: strategy descriptions and parameters</summary>
+      <div className="space-y-4 p-4">
+        <p className="text-xs text-muted">The recommended <b>Expected Opportunity</b> strategy needs no tuning. The classic momentum strategies are kept for comparison; enabling them lets the live bot use them too (still only on stocks confirmed available in your game).</p>
+        {enabled && <Button variant="primary" onClick={() => save()} disabled={saving}>Save enabled set</Button>}
+        {strategies.map((s) => (
           <StrategyCard key={s.id} info={s} enabled={en.includes(s.id)} params={{ ...s.params, ...(edits[s.id] ?? {}) }}
             onToggle={(v) => setEnabled(v ? [...new Set([...en, s.id])] : en.filter((x) => x !== s.id))}
-            onParam={(k, v) => setEdits({ ...edits, [s.id]: { ...(edits[s.id] ?? {}), [k]: v } })}
-            onSave={() => save(s.id)} saving={saving} dirty={!!edits[s.id]} />
+            onParam={(k, v) => setEdits({ ...edits, [s.id]: { ...(edits[s.id] ?? {}), [k]: v } })} onSave={() => save(s.id)} saving={saving} dirty={!!edits[s.id]} />
         ))}
-      </section>
+      </div>
+    </details>
+  );
+}
+
+// ---------------------------------------------------------------- page
+type Tab = "compare" | "model" | "backtest";
+export default function StrategyLab() {
+  const { version } = useApp();
+  const { data: strategies, reload: reloadStrategies, error } = usePoll(api.strategies, null, [version]);
+  const { data: datasets } = usePoll(api.datasets, null);
+  const { data: latest, loading } = usePoll(api.labLatest, null);
+  const [tab, setTab] = usePref<Tab>("lab-tab", "compare");
+  if (error) return <ErrorBanner message={error} />;
+  if (!strategies || !datasets || loading) return <Loading rows={6} label="Loading Strategy Lab" />;
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-center gap-3">
+        <Segmented label="Lab section" value={tab} onChange={setTab} options={[{ value: "compare", label: "Compare modes" }, { value: "model", label: "Model check" }, { value: "backtest", label: "Backtests" }]} />
+        <span className="text-xs text-muted">Every result is labelled with the kind of data it used. Poor results are shown as they are.</span>
+      </div>
+      {tab === "compare" && <CompareTab latest={latest?.comparison} datasets={datasets} />}
+      {tab === "model" && <ModelCheckTab latest={latest?.model_check} datasets={datasets} />}
+      {tab === "backtest" && <BacktestTab datasets={datasets} strategies={strategies} reloadStrategies={reloadStrategies} />}
     </div>
   );
 }

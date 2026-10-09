@@ -3,7 +3,7 @@ import { tone } from "../format";
 
 export function Card({ title, right, children, className = "", pad = true }: { title?: ReactNode; right?: ReactNode; children: ReactNode; className?: string; pad?: boolean }) {
   return (
-    <section className={`animate-in rounded-xl border border-line bg-panel ${className}`}>
+    <section className={`animate-in min-w-0 rounded-xl border border-line bg-panel ${className}`}>
       {(title || right) && (
         <header className="flex items-center justify-between gap-3 border-b border-line px-4 py-2.5">
           <h2 className="text-[13px] font-semibold tracking-wide text-ink">{title}</h2>
@@ -108,7 +108,9 @@ export function Progress({ value, className = "" }: { value: number; className?:
 
 export function Icon({ name, className = "h-4 w-4" }: { name: string; className?: string }) {
   const paths: Record<string, string> = {
-    overview: "M3 13h8V3H3v10zm0 8h8v-6H3v6zm10 0h8V11h-8v10zm0-18v6h8V3h-8z",
+    dashboard: "M3 13h8V3H3v10zm0 8h8v-6H3v6zm10 0h8V11h-8v10zm0-18v6h8V3h-8z",
+    opportunities: "M12 3l2.6 5.6 6.1.7-4.5 4.2 1.2 6L12 16.5 6.6 19.5l1.2-6L3.3 9.3l6.1-.7L12 3z",
+    portfolio: "M4 7h16v12H4zM9 7V5a1 1 0 011-1h4a1 1 0 011 1v2M4 12h16",
     scanner: "M11 4a7 7 0 105.2 11.7l4.1 4.1 1.4-1.4-4.1-4.1A7 7 0 0011 4zm0 2a5 5 0 110 10 5 5 0 010-10z",
     stock: "M3 17l5-6 4 4 8-10M3 21h18",
     positions: "M4 6h16M4 12h16M4 18h10",

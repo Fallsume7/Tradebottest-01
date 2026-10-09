@@ -24,6 +24,7 @@ dependencies = [
 
 [project.optional-dependencies]
 browser = ["playwright>=1.44"]
+ml = ["scikit-learn>=1.4"]  # optional gradient-boosted forecaster (never labelled validated without out-of-sample proof)
 dev = [
   "pytest>=8",
   "ruff>=0.4",

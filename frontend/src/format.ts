@@ -44,3 +44,13 @@ export function chicagoTime(iso: string | null | undefined, withDate = false): s
 export function titleCase(s: string): string {
   return s.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
+
+/** Read a user-chosen file as text (FileReader works everywhere, including older browsers and jsdom). */
+export function readText(file: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(String(r.result ?? ""));
+    r.onerror = () => reject(new Error("Could not read that file."));
+    r.readAsText(file);
+  });
+}

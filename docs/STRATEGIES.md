@@ -2,6 +2,8 @@
 
 > **No strategy here is claimed to make money.** They are *illustrative, rule-based momentum screens* whose purpose is to exercise the scanner, risk engine, simulator and backtester. Past or simulated results do not predict future results. The bundled sample data is fabricated.
 
+**Start here:** the recommended default is **Expected Opportunity** (`expected_opportunity`), a predictive strategy that ranks stocks by expected return after costs and plans each trade individually; it is documented in [PREDICTIVE_STRATEGY.md](PREDICTIVE_STRATEGY.md). Everything below is the set of *classic momentum screens* (A-E), kept for comparison in the Strategy Lab and optionally enabled in *Settings → Trading Strategy → Strategies in use*. **All strategies - classic ones included - only ever trade stocks confirmed available in your MarketWatch game** ([ELIGIBILITY.md](ELIGIBILITY.md)).
+
 All strategies share one interface (`mwbot/strategies/base.py`):
 
 ```python
@@ -12,7 +14,7 @@ class Strategy:
 ```
 
 * A strategy only ever sees a `SignalInput` built from **complete bars up to "now"** (see ARCHITECTURE §3), the scanner metrics and the scanner result. It cannot see the future.
-* `evaluate_entry` returns *all* conditions — not just the first failure — so the dashboard's Stock page can show exactly why a symbol did or did not qualify, and the trade record stores the passing conditions as the "why bought" text.
+* `evaluate_entry` returns *all* conditions — not just the first failure — so the dashboard's explanation drawer can show exactly why a symbol did or did not qualify, and the trade record stores the passing conditions as the "why bought" text.
 * Hard risk exits (stop, trailing stop, profit target, time stop, end-of-day liquidation, daily-loss and emergency flatten) are applied by the bot for **every** strategy; `evaluate_exit` adds the strategy's own discretionary exit on top.
 * **Sizing** is common: `qty = min(risk-based, allocation-based, cash-based)` where risk-based = `equity × risk_per_trade% ÷ (price × stop%)`, allocation-based = `equity × max_position% ÷ price`, cash-based = buying power with a 1 % buffer.
 * All parameters are validated Pydantic fields (ranges enforced), editable in **Strategy Lab**, persisted in settings.

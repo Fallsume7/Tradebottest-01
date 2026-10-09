@@ -55,7 +55,7 @@ Copy-Item .env.example .env
 powershell -File scripts\run.ps1
 ```
 
-Open <http://127.0.0.1:8000>. **Overview → Start session** runs a synthetic trading day (choose *Instant* for a few seconds, *Watch it* to stream).
+Open <http://127.0.0.1:8000>. Press **Start** (top right) to run a synthetic trading day with the recommended settings (under *Dashboard → Mode & session* choose *Instant* for a few seconds or *Watch it* to stream).
 
 The default is **demo mode — no keys required**. Everything is labelled SYNTHETIC in the header.
 

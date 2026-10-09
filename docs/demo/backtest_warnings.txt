@@ -1,0 +1,5 @@
+WARNING: SYNTHETIC data: results show how the machinery behaves on fabricated prices, not how any strategy performs in real markets.
+WARNING: Only 0 trades (< 30): win rate and averages are statistically weak; do not draw conclusions.
+WARNING: Only 10 days: risk-adjusted ratios withheld; one lucky day can dominate the result.
+WARNING: Fills are modelled from 1-minute bars with documented spread/slippage/participation rules; real fills (queue position, hidden liquidity, halts) differ.
+WARNING: Tuning parameters on this same data and then reporting it is overfitting; use the out-of-sample split and fresh data.

@@ -486,7 +486,7 @@ class TradingBot:
             return
         best = cands[0]
         failed = [g for g in best.gates if not g.passed]
-        why = f"{failed[0].label.lower()} ({failed[0].detail})" if failed else "no gate failed"
+        why = f"{failed[0].label.lower()}: {failed[0].detail}" if failed else "no gate failed"
         self._note_once(
             "waiting:best",
             f"Waiting for a better setup: the best candidate {best.symbol} does not qualify yet - {why}",

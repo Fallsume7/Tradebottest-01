@@ -137,3 +137,31 @@ export function EquityChart({ points, baseline, height = 260 }: { points: LinePo
 
   return <div ref={host} style={{ height }} className="w-full" data-testid="equity-chart" />;
 }
+
+export interface NamedLine { name: string; color: string; points: LinePoint[] }
+
+/** Several equity curves on one axis (used to compare modes on identical data). */
+export function CompareChart({ lines, height = 240 }: { lines: NamedLine[]; height?: number }) {
+  const host = useRef<HTMLDivElement>(null);
+  const chart = useRef<IChartApi | null>(null);
+
+  useEffect(() => {
+    const el = host.current;
+    if (!el) return;
+    const c = createChart(el, baseOptions(el));
+    chart.current = c;
+    for (const l of lines) {
+      const s = c.addLineSeries({ color: l.color, lineWidth: 2, priceLineVisible: false, title: l.name });
+      const seen = new Set<number>();
+      const data = l.points.filter((p) => (seen.has(p.time) ? false : (seen.add(p.time), true))).sort((a, b) => a.time - b.time);
+      s.setData(data.map((p) => ({ time: p.time as UTCTimestamp, value: p.value })));
+    }
+    c.timeScale().fitContent();
+    return () => {
+      c.remove();
+      chart.current = null;
+    };
+  }, [lines]);
+  useResize(chart, host);
+  return <div ref={host} style={{ height }} className="w-full" data-testid="compare-chart" />;
+}

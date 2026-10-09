@@ -1,0 +1,117 @@
+{
+  "rows": [
+    {
+      "label": "Maximum Expected Return",
+      "mode": "max_expected_return",
+      "id": "d49c4d36b9a7",
+      "total_return_pct": 0.0,
+      "final_equity": 100000.0,
+      "max_drawdown_pct": 0.0,
+      "win_rate": null,
+      "avg_return_pct": null,
+      "profit_factor": null,
+      "n_trades": 0,
+      "avg_hold_minutes": null,
+      "net_pnl": 0.0,
+      "target_hit_rate": null,
+      "stop_rate": null,
+      "end_of_day_rate": null,
+      "forecast_exit_rate": null,
+      "out_of_sample": {
+        "n_days": 3,
+        "total_return_pct": 0.0,
+        "n_trades": 0,
+        "win_rate": null,
+        "avg_return_pct": null
+      }
+    },
+    {
+      "label": "Aggressive Upside",
+      "mode": "aggressive_upside",
+      "id": "df8f13b34473",
+      "total_return_pct": 1.257789999999992,
+      "final_equity": 101257.79,
+      "max_drawdown_pct": 1.1610558595020886,
+      "win_rate": 0.6666666666666666,
+      "avg_return_pct": 1.394459227569709,
+      "profit_factor": 21.797287644594576,
+      "n_trades": 3,
+      "avg_hold_minutes": 97.0,
+      "net_pnl": 1257.7949999999983,
+      "target_hit_rate": 0.0,
+      "stop_rate": 0.6666666666666666,
+      "end_of_day_rate": 0.0,
+      "forecast_exit_rate": 0.3333333333333333,
+      "out_of_sample": {
+        "n_days": 3,
+        "total_return_pct": 0.24420000000000552,
+        "n_trades": 1,
+        "win_rate": 1.0,
+        "avg_return_pct": 0.8095081014814592
+      }
+    },
+    {
+      "label": "Simple momentum (baseline)",
+      "mode": "baseline_momentum",
+      "id": "b0866b8f057c",
+      "total_return_pct": 1.808070000000006,
+      "final_equity": 101808.07,
+      "max_drawdown_pct": 0.8003781653751655,
+      "win_rate": 0.5,
+      "avg_return_pct": 0.8128993126604969,
+      "profit_factor": 2.2173877680130873,
+      "n_trades": 22,
+      "avg_hold_minutes": 40.81818181818182,
+      "net_pnl": 1808.0676000000021,
+      "target_hit_rate": 0.13636363636363635,
+      "stop_rate": 0.6363636363636364,
+      "end_of_day_rate": 0.22727272727272727,
+      "forecast_exit_rate": 0.0,
+      "out_of_sample": {
+        "n_days": 3,
+        "total_return_pct": 0.36690671438044387,
+        "n_trades": 8,
+        "win_rate": 0.375,
+        "avg_return_pct": 0.4541957657387773
+      }
+    },
+    {
+      "label": "Buy & hold universe (benchmark)",
+      "mode": "benchmark",
+      "total_return_pct": -0.5603648811389195,
+      "n_trades": null
+    }
+  ],
+  "verdict": "Too few trades to say which mode is better (0 vs 3; 30+ each needed). Treat the table as a demonstration of the machinery, not a recommendation.",
+  "same_data": {
+    "dataset": "csv:synthetic-sample",
+    "feed": {
+      "kind": "synthetic",
+      "provider": "csv:synthetic-sample",
+      "label": "SYNTHETIC sample dataset (replayed as historical) - fabricated prices",
+      "delay_seconds": 0,
+      "warnings": [
+        "HLIX: possible unadjusted split(s) on [('2026-09-16', 2.0208604954367666)]",
+        "QNTM: possible unadjusted split(s) on [('2026-09-21', 3.987206823027718)]"
+      ],
+      "is_realtime": false
+    },
+    "n_days": 10,
+    "eligibility": {
+      "applied": true,
+      "mode": "point_in_time",
+      "n_tickers": 27,
+      "source": "csv:synthetic-sample"
+    },
+    "forecaster": "heuristic"
+  },
+  "warnings": [
+    "SYNTHETIC data: results show how the machinery behaves on fabricated prices, not how any strategy performs in real markets.",
+    "Only 0 trades (< 30): win rate and averages are statistically weak; do not draw conclusions.",
+    "Only 10 days: risk-adjusted ratios withheld; one lucky day can dominate the result.",
+    "Fills are modelled from 1-minute bars with documented spread/slippage/participation rules; real fills (queue position, hidden liquidity, halts) differ.",
+    "Tuning parameters on this same data and then reporting it is overfitting; use the out-of-sample split and fresh data.",
+    "Only 3 trades (< 30): win rate and averages are statistically weak; do not draw conclusions.",
+    "Only 22 trades (< 30): win rate and averages are statistically weak; do not draw conclusions."
+  ]
+}

@@ -5,6 +5,7 @@ Set MWBOT_SCREENSHOTS=1 to regenerate docs/screenshots/*.png.
 """
 
 import os
+import re
 import threading
 import time
 from pathlib import Path
@@ -65,123 +66,204 @@ def shot(page, name):
         page.screenshot(path=str(SHOTS / f"{name}.png"))
 
 
-def test_dashboard_full_workflow(server, browser):
+def _errors(page):
+    errors: list[str] = []
+    page.on("pageerror", lambda e: errors.append(str(e)))
+    page.on("console", lambda m: errors.append(m.text) if m.type == "error" else None)
+    return errors
+
+
+def _run_to_midday(svc, steps=90):
+    svc.start_session(speed=1)
+    svc.pause_stream()
+    svc.step_session(steps)
+
+
+def test_dashboard_first_run_just_works_and_is_honest(server, browser):
     from playwright.sync_api import expect
 
     url, svc = server
     page = browser.new_page(viewport={"width": 1440, "height": 900})
-    errors: list[str] = []
-    page.on("pageerror", lambda e: errors.append(str(e)))
-    page.on("console", lambda m: errors.append(m.text) if m.type == "error" else None)
+    errors = _errors(page)
     page.goto(url)
-
-    # honest labelling + safety badges
     expect(page.get_by_text("PAPER ONLY - no real money")).to_be_visible()
-    expect(page.get_by_text("SYNTHETIC - synthetic-demo")).to_be_visible()
-    expect(page.get_by_test_id("stat-equity")).to_contain_text("$100,000.00")
+    expect(page.get_by_text("SYNTHETIC", exact=True).first).to_be_visible()
+    expect(page.get_by_text("Welcome - nothing to configure")).to_be_visible()
+    expect(page.get_by_text("Estimate - not validated").first).to_be_visible()
+    nav = page.get_by_role("complementary", name="Primary").get_by_role("link")
+    assert [nav.nth(i).get_attribute("aria-label") for i in range(nav.count())] == [
+        "Dashboard",
+        "Opportunities",
+        "Portfolio",
+        "Strategy Lab",
+        "Trade History",
+        "Settings",
+    ]
+    shot(page, "dashboard_idle")
 
-    # run a whole synthetic day instantly
-    page.get_by_label("Replay speed").select_option("instant")
-    page.get_by_role("button", name="Start session").click()
-    expect(page.get_by_role("button", name="Run next trading day")).to_be_visible(timeout=90_000)
-    expect(page.get_by_test_id("decision-feed")).to_be_visible()
-    shot(page, "overview")
-    equity_text = page.get_by_test_id("stat-equity").inner_text()
-    assert equity_text != "$100,000.00" or svc.broker.trades == []  # state in the UI reflects the backend
+    # one click: Start -> a session streams, the bot is running, activity appears
+    page.get_by_role("button", name="Start", exact=True).click()
+    expect(page.get_by_text("Bot: Running")).to_be_visible()
+    svc.pause_stream()
+    svc.step_session(60)
+    expect(page.get_by_test_id("top5")).to_be_visible(timeout=15000)
+    expect(page.get_by_test_id("activity-feed")).to_be_visible()
+    shot(page, "dashboard_running")
+    assert errors == [], errors
 
-    # scanner: presets + score breakdown
-    page.get_by_role("link", name="Scanner").first.click()
-    expect(page.get_by_text("Opportunities")).to_be_visible()
-    page.get_by_role("button", name="Penny stocks").click()
-    expect(page.get_by_text("preset: penny stocks")).to_be_visible(timeout=10_000)
-    page.get_by_role("button", name="Small-cap momentum").click()
-    expect(page.get_by_text("preset: small cap momentum")).to_be_visible(timeout=10_000)
-    first = page.locator("[data-testid^=scan-row-]").first
-    expect(first).to_be_visible(timeout=10_000)
-    first.click()
-    expect(page.get_by_text("Score breakdown")).to_be_visible()
-    shot(page, "scanner")
 
-    # stock detail: chart + strategy conditions + trade ticket
-    page.locator("[data-testid^=scan-row-]").first.get_by_role("button").first.click()
-    expect(page.get_by_test_id("price-chart").locator("canvas").first).to_be_visible(timeout=15_000)
-    expect(page.get_by_text("Strategy signals")).to_be_visible()
-    expect(page.get_by_test_id("eval-opening_momentum")).to_be_visible(timeout=10_000)
-    shot(page, "stock")
+def test_modes_controls_and_emergency_stop(server, browser):
+    from playwright.sync_api import expect
 
-    # history: why bought / why sold
-    page.get_by_role("link", name="History").first.click()
-    if svc.broker.trades:
-        row = page.locator("[data-testid^=trade-]").first
-        expect(row).to_be_visible(timeout=10_000)
-        row.click()
-        expect(page.get_by_text("Why bought:")).to_be_visible()
-        expect(page.get_by_text("Why sold:")).to_be_visible()
-    shot(page, "history")
+    url, svc = server
+    page = browser.new_page(viewport={"width": 1440, "height": 900})
+    errors = _errors(page)
+    page.goto(url)
+    _run_to_midday(svc, 40)
+    svc.control("start")
+    page.reload()
 
-    # performance
-    page.get_by_role("link", name="Performance").first.click()
-    expect(page.get_by_text("Equity curve")).to_be_visible()
-    shot(page, "performance")
+    # switch mode through the top bar, with a confirmation
+    page.get_by_label("Trading mode").first.select_option("aggressive_upside")
+    page.get_by_role("dialog").get_by_role("button", name="Switch mode").click()
+    expect(page.get_by_text("Now trading in Aggressive Upside mode")).to_be_visible()
+    assert svc.settings.trading.mode.value == "aggressive_upside"
+    page.get_by_label("Trading mode").first.select_option("max_expected_return")
+    page.get_by_role("dialog").get_by_role("button", name="Switch mode").click()
+    expect(page.get_by_text("Now trading in Maximum Expected Return mode")).to_be_visible()
 
-    # strategy lab: run a real backtest through the UI
-    page.get_by_role("link", name="Strategy Lab").first.click()
-    page.get_by_label("From date").select_option(index=1)
-    page.get_by_label("To date").select_option(index=4)
-    page.get_by_role("button", name="Run backtest").click()
-    expect(page.get_by_test_id("bt-compare")).to_be_visible(timeout=120_000)
-    expect(page.get_by_test_id("bt-warnings").first).to_contain_text("SYNTHETIC")
-    shot(page, "strategy-lab")
+    # pause / resume / stop
+    page.get_by_role("button", name="Pause", exact=True).click()
+    expect(page.get_by_text("Bot: Paused")).to_be_visible()
+    page.get_by_role("button", name="Resume").click()
+    expect(page.get_by_text("Bot: Running")).to_be_visible()
 
-    # settings: validation error from the server is shown, valid save succeeds
-    page.get_by_role("link", name="Settings").first.click()
-    page.get_by_label("Max simultaneous holdings").fill("7")
-    page.get_by_role("button", name="Save settings").click()
-    expect(page.get_by_role("status").filter(has_text="Saved.")).to_be_visible(timeout=10_000)
-    assert svc.settings.risk.max_positions == 7
-    page.get_by_label("Begin liquidation").fill("14:00")
-    page.get_by_label("No new positions after").fill("14:30")
-    page.get_by_role("button", name="Save settings").click()
-    expect(page.get_by_role("alert").filter(has_text="last_entry")).to_be_visible(timeout=10_000)
+    # emergency stop needs a confirmation and then blocks everything until cleared
+    page.get_by_role("button", name="Emergency stop").click()
+    page.get_by_role("dialog").get_by_role("button", name="Emergency stop").click()
+    expect(page.get_by_role("alert").get_by_text("EMERGENCY STOP ACTIVE")).to_be_visible()
+    page.get_by_role("button", name="Clear emergency stop").click()
+    expect(page.get_by_text("Bot: Stopped")).to_be_visible()
+    assert errors == [], errors
+
+
+def test_settings_workflow_in_a_real_browser(server, browser):
+    from playwright.sync_api import expect
+
+    url, svc = server
+    page = browser.new_page(viewport={"width": 1440, "height": 900})
+    errors = _errors(page)
+    page.goto(url + "/#/settings")
+    expect(page.get_by_text("You are using the recommended settings")).to_be_visible()
     shot(page, "settings")
+    page.get_by_role("button", name="Risk Management").click()
 
-    # emergency stop needs confirmation and is reflected in the UI
-    page.once("dialog", lambda d: d.dismiss())
-    page.get_by_role("button", name="Emergency stop").click()
-    page.wait_for_timeout(300)
-    assert svc.bot.state.value != "emergency_stop"
-    page.once("dialog", lambda d: d.accept())
-    page.get_by_role("button", name="Emergency stop").click()
-    expect(page.get_by_text("bot: emergency stop")).to_be_visible(timeout=10_000)
+    # frontend validation blocks an impossible value
+    box = page.get_by_label("Largest single position (type a value)")
+    box.fill("500")
+    expect(page.get_by_text("Must be at most 100%")).to_be_visible()
+    expect(page.get_by_role("button", name="Save changes")).to_be_disabled()
 
-    # the only console error allowed is the browser's own line for the deliberate 400 (invalid schedule) above
-    unexpected = [e for e in errors if "favicon" not in e and "status of 400" not in e]
-    assert not unexpected, unexpected
-    assert sum("status of 400" in e for e in errors) == 1
+    # a valid edit shows its effect, saves, persists in the database
+    box.fill("8")
+    expect(page.get_by_test_id("effects")).to_contain_text("new trades only", timeout=5000)
+    page.get_by_role("button", name="Save changes").click()
+    expect(page.get_by_text("Settings saved")).to_be_visible()
+    assert svc.settings.risk.max_position_pct == 8
+    expect(page.get_by_text("setting(s) differ from the recommended defaults")).to_be_visible()
+
+    # reset to recommended (with confirmation)
+    page.get_by_role("button", name="Reset all to recommended").click()
+    page.get_by_role("dialog").get_by_role("button", name="Reset to recommended").click()
+    expect(page.get_by_text("You are using the recommended settings")).to_be_visible()
+    assert svc.settings.risk.max_position_pct == 10
+
+    # advanced settings are hidden until requested
+    page.get_by_role("button", name="Trading Strategy").click()
+    assert page.get_by_text("Minimum reward-to-risk").count() == 0
+    page.get_by_role("switch", name="Show advanced settings").click()
+    expect(page.get_by_text("Minimum reward-to-risk")).to_be_visible()
+    assert errors == [], errors
 
 
-def test_dashboard_is_usable_on_a_phone(server, browser):
+def test_opportunities_eligibility_and_explanations(server, browser):
     from playwright.sync_api import expect
 
-    url, _ = server
-    page = browser.new_page(viewport={"width": 390, "height": 844})
-    page.goto(url)
-    expect(page.get_by_test_id("stat-equity")).to_be_visible()
-    expect(page.get_by_label("Mobile")).to_be_visible()
-    expect(page.get_by_label("Primary")).to_be_hidden()
-    overflow = page.evaluate("document.documentElement.scrollWidth - document.documentElement.clientWidth")
-    assert overflow <= 1, f"horizontal page scroll of {overflow}px on a 390px screen"
-    page.get_by_label("Mobile").get_by_role("link", name="Scanner").click()
-    expect(page.get_by_text("Scanner filters")).to_be_visible()
-    shot(page, "mobile")
+    url, svc = server
+    page = browser.new_page(viewport={"width": 1440, "height": 900})
+    errors = _errors(page)
+    _run_to_midday(svc, 90)
+    svc.control("start")
+    page.goto(url + "/#/opportunities")
+    table = page.get_by_test_id("opp-table")
+    expect(table).to_be_visible(timeout=15000)
+    expect(table.get_by_text("Eligibility")).to_be_visible()
+    shot(page, "opportunities")
+
+    # filters
+    page.get_by_role("button", name="Unverified (research)").click()
+    assert page.get_by_test_id("opp-table").get_by_text("Unverified").count() >= 1
+    page.get_by_role("button", name=re.compile(r"^All")).first.click()
+
+    # explanation drawer for the first row: plan, checks, honest estimate label
+    page.get_by_test_id("opp-table").locator("td[aria-label^='Explain']").first.click()
+    dlg = page.get_by_role("dialog", name="Details")
+    expect(dlg.get_by_text("Checks before buying")).to_be_visible(timeout=10000)
+    expect(dlg.get_by_text("Estimate - not validated")).to_be_visible()
+    expect(dlg.get_by_text("Your game list")).to_be_visible()
+    shot(page, "explain_drawer")
+    page.keyboard.press("Escape")
+
+    # mark the first listed stock unavailable: it disappears from recommendations
+    row = page.get_by_test_id("opp-table").locator("tbody tr").first
+    sym = row.locator("td").first.locator("div").first.inner_text()
+    row.get_by_role("button", name=f"Mark {sym} unavailable").click()
+    page.get_by_role("dialog").get_by_role("button", name="Mark unavailable").click()
+    expect(page.get_by_text(f"{sym} marked unavailable")).to_be_visible()
+    assert svc.bot.universe.record_on(sym, None).status.value == "confirmed_unavailable"
+    assert errors == [], errors
 
 
-def test_backend_unreachable_shows_a_clear_error(server, browser):
+def test_every_page_renders_and_layouts_fit_tablet_and_phone(server, browser):
     from playwright.sync_api import expect
 
-    url, _ = server
-    page = browser.new_page()
-    page.route("**/api/**", lambda r: r.abort())
-    page.goto(url)
-    expect(page.get_by_text("Connecting to the backend")).to_be_visible()
-    expect(page.get_by_role("alert").first).to_contain_text("Cannot reach the backend")
+    url, svc = server
+    _run_to_midday(svc, 100)
+    svc.control("start")
+    for name, size in (("desktop", (1440, 900)), ("tablet", (820, 1100)), ("phone", (390, 800))):
+        page = browser.new_page(viewport={"width": size[0], "height": size[1]})
+        errors = _errors(page)
+        for route, marker in (
+            ("dashboard", "Top 5 opportunities"),
+            ("opportunities", "Your MarketWatch stock list"),
+            ("portfolio", "Active positions"),
+            ("lab", "Maximum Expected Return vs Aggressive Upside"),
+            ("history", "Trades"),
+            ("settings", "Trading Strategy"),
+        ):
+            page.goto(f"{url}/#/{route}")
+            expect(page.get_by_text(marker, exact=False).first).to_be_visible(timeout=15000)
+            overflow = page.evaluate(
+                "document.documentElement.scrollWidth - document.documentElement.clientWidth"
+            )
+            assert overflow <= 1, f"{name} {route}: horizontal page scroll of {overflow}px"
+            if name == "tablet":
+                shot(page, f"tablet_{route}")
+        assert errors == [], (name, errors)
+        page.close()
+
+
+def test_strategy_lab_runs_the_mode_comparison(server, browser):
+    from playwright.sync_api import expect
+
+    url, svc = server
+    page = browser.new_page(viewport={"width": 1440, "height": 900})
+    errors = _errors(page)
+    page.goto(url + "/#/lab")
+    page.get_by_role("button", name="Compare the two modes").click()
+    expect(page.get_by_test_id("compare-table")).to_be_visible(timeout=240000)
+    expect(page.get_by_test_id("verdict")).to_be_visible()
+    expect(page.get_by_test_id("compare-warnings")).to_contain_text("SYNTHETIC")
+    expect(page.get_by_text("SYNTHETIC DATA").first).to_be_visible()
+    shot(page, "strategy_lab")
+    assert errors == [], errors

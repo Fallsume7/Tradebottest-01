@@ -44,17 +44,26 @@ def cmd_demo_day(args: argparse.Namespace) -> int:
     from mwbot.bot.runner import SessionRunner
     from mwbot.config import AppSettings
     from mwbot.data.synthetic import SyntheticProvider
+    from mwbot.eligibility.demo import demo_seed
+    from mwbot.eligibility.universe import EligibilityUniverse
     from mwbot.trading.broker import PaperBroker
 
     settings = AppSettings()
     broker = PaperBroker(settings.risk.starting_capital, settings.costs)
-    bot = TradingBot(settings, broker)
+    # Demo days use the clearly labelled made-up demo stock list; --no-eligibility runs without any list (labelled).
+    universe = EligibilityUniverse.allow_all() if args.no_eligibility else EligibilityUniverse(demo_seed())
+    bot = TradingBot(settings, broker, eligibility=universe)
     bot.start()
     d = date.fromisoformat(args.date)
     source = SyntheticProvider(args.seed).open_session(d)
     report = SessionRunner.for_date(bot, source, d).run()
     assert report is not None
     print("*** SYNTHETIC DATA - fabricated prices, not a real market ***")
+    print(
+        "*** Stock list: NOT applied (every ticker allowed) ***"
+        if args.no_eligibility
+        else "*** Stock list: made-up DEMO list (only 'confirmed available' names are tradable) ***"
+    )
     print(report_markdown(report))
     return 0
 
@@ -64,7 +73,26 @@ def cmd_backtest(args: argparse.Namespace) -> int:
 
     env = EnvSettings()
     provider = _provider(env, args.dataset)
-    cfg = BacktestConfig(name=args.name, strategies=args.strategies, oos_fraction=args.oos)
+    from mwbot.config import TradingMode
+
+    cfg = BacktestConfig(
+        name=args.name,
+        strategies=args.strategies,
+        oos_fraction=args.oos,
+        mode=TradingMode(args.mode),
+        eligibility="none" if args.no_eligibility else "point_in_time",
+        forecaster=args.forecaster,
+    )
+    if args.compare_modes:
+        from mwbot.backtest.engine import compare_modes
+
+        comp = compare_modes(provider, cfg)
+        print(
+            json.dumps(
+                {k: comp[k] for k in ("rows", "verdict", "same_data", "warnings")}, indent=2, default=str
+            )
+        )
+        return 0
     res = run_backtest(provider, cfg)
     print(
         json.dumps({k: v for k, v in res.summary.items() if not isinstance(v, dict)}, indent=2, default=str)
@@ -118,6 +146,9 @@ def main(argv: list[str] | None = None) -> int:
     d = sub.add_parser("demo-day", help="run one synthetic trading day headlessly")
     d.add_argument("--date", default="2026-10-08")
     d.add_argument("--seed", type=int, default=42)
+    d.add_argument(
+        "--no-eligibility", action="store_true", help="do not apply any stock list (labelled in the output)"
+    )
     d.set_defaults(fn=cmd_demo_day)
 
     b = sub.add_parser("backtest", help="run a backtest on a dataset (or 'demo')")
@@ -125,7 +156,17 @@ def main(argv: list[str] | None = None) -> int:
     b.add_argument(
         "--strategies",
         nargs="+",
-        default=["opening_momentum", "gap_continuation", "momentum_breakout", "volume_surge"],
+        default=["expected_opportunity"],
+    )
+    b.add_argument(
+        "--mode", choices=["max_expected_return", "aggressive_upside"], default="max_expected_return"
+    )
+    b.add_argument("--forecaster", choices=["heuristic", "statistical"], default="heuristic")
+    b.add_argument(
+        "--no-eligibility", action="store_true", help="ignore the dataset's stock list (result is labelled)"
+    )
+    b.add_argument(
+        "--compare-modes", action="store_true", help="run both modes + baselines on identical data"
     )
     b.add_argument("--oos", type=float, default=0.3)
     b.add_argument("--name", default="cli-backtest")

@@ -4,10 +4,17 @@
 
 **Dashboard** — *Strategy Lab → Run a backtest*: choose a dataset (the bundled `synthetic-sample`, any folder you add, or the "demo generator" for the last 5 trading days), pick dates, strategies, capital, slippage and an out-of-sample hold-out. Tick *compare* to run each strategy alone plus all together under identical data and costs. Progress is shown while the job runs; results can be exported as CSV and are saved in SQLite.
 
+**What changed with the predictive strategy** — the default backtest runs `expected_opportunity` with **point-in-time MarketWatch eligibility** (only stocks confirmed tradable *on each date* may trade; a dataset without an eligibility history is refused unless you explicitly choose "eligibility not applied", which is labelled in every result). The forecaster is the transparent rule-based one, or `statistical`, which re-fits a ridge model **every day on earlier days only**. Same-time-of-day history is learned from earlier sessions only. Results add: exit mix (target / stop / forecast / end of day / deadline / rotation), target-hit and stop frequencies, average trade return and hold time, and **forecast accuracy** (predicted vs realised net return per trade, always flagged "not calibrated" unless validated). Baselines: equal-weight buy-and-hold of the universe and the classic top-gainer momentum strategy.
+
+**Strategy Lab → Compare modes** (or `mwbot backtest --compare-modes`) runs *Maximum Expected Return* and *Aggressive Upside* (plus the baselines) on identical data, costs, stock list and forecaster, with an equity overlay, an out-of-sample block when you hold days out, and a verdict that says "too few trades to say" until each side has 30+. **Model check** is the walk-forward evaluation of the forecasters (train strictly on earlier days, score the next unseen day; a model is called validated only after ≥ 10 out-of-sample sessions and passing calibration/discrimination criteria).
+
 **CLI**
 
 ```bash
+mwbot backtest --dataset synthetic_sample --oos 0.3 --out reports/                     # predictive strategy (default)
 mwbot backtest --dataset synthetic_sample --strategies opening_momentum gap_continuation --oos 0.3 --out reports/
+mwbot backtest --dataset synthetic_sample --mode aggressive_upside --forecaster statistical
+mwbot backtest --dataset synthetic_sample --compare-modes
 ```
 
 **Python**
@@ -63,3 +70,12 @@ For each date: open the session → `SessionRunner` steps minute by minute from 
 5. Fills ignore your own market impact beyond the participation/impact heuristic.
 6. Parameter sweeps are not provided on purpose (they invite overfitting). If you add one, hold out untouched data.
 7. The synthetic dataset's regimes were authored by hand; momentum often "works" in it by construction (half the setups continue). **Do not read its returns as evidence about any strategy.**
+
+## Eligibility datasets
+
+A dataset may include `eligibility.csv` (`ticker,status,effective_from,...`, see ELIGIBILITY.md). The bundled synthetic sample does, including stocks that become unavailable mid-period. Datasets without it need either your own list (used point-in-time from its `effective_from` dates) or the explicit "not applied" choice.
+
+## Reading the numbers honestly
+
+* Ten synthetic days is a demonstration, not evidence. The comparison table shows weak or negative results as they are.
+* On bar-only data the modelled round-trip cost (assumed 40 bps spread + slippage) is larger than the default mode's modelled edge, so it often takes **no trades** on the bundled sample - the aggressive preset and the old momentum baseline take some. That is the cost model talking, not a bug; see PREDICTIVE_STRATEGY.md *Known limits*.

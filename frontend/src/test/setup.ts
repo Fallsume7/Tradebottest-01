@@ -6,6 +6,7 @@ afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
   window.location.hash = "";
+  window.localStorage.clear();
 });
 
 // jsdom has no ResizeObserver (recharts / charts need it) and no canvas (lightweight-charts).
