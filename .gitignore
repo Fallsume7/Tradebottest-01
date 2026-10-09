@@ -1,0 +1,48 @@
+# Secrets / local config
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+cookies*.json
+storage_state*.json
+browser_profile/
+chrome_profile/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Generated local data
+/data/
+/backend/data/
+*.db
+*.sqlite
+*.sqlite3
+logs/
+*.log
+backtest_exports/
+reports/
+playwright-report/
+test-results/
+
+# Node
+node_modules/
+frontend/dist/
+frontend/.vite/
+*.tsbuildinfo
+coverage/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

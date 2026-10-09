@@ -1,0 +1,29 @@
+ticker,status,name,exchange,security_type,verified_on,effective_from,rejection_reason,restrictions,source
+BRZO,confirmed_tradable,Brezo Foods (synthetic),NYSE American,common_stock,,2000-01-01,,,demo-seed
+DRVN,confirmed_tradable,Drivn Mobility (synthetic),NASDAQ,common_stock,2026-09-17,2026-09-17,,,demo-seed
+DYNO,confirmed_unavailable,Dynova Chemicals (synthetic),NASDAQ,common_stock,,2000-01-01,Restricted security in this game (demo example),,demo-seed
+ECLP,confirmed_tradable,Eclipta Space (synthetic),NYSE American,common_stock,,2000-01-01,,,demo-seed
+FRGE,confirmed_tradable,Forgex Steel (synthetic),NASDAQ,common_stock,,2000-01-01,,,demo-seed
+HLIX,confirmed_tradable,Helixor Bio (synthetic),NYSE,common_stock,,2000-01-01,,,demo-seed
+IGNT,confirmed_tradable,Igniton Fuel Cells (synthetic),NYSE,common_stock,,2000-01-01,,,demo-seed
+JTSM,confirmed_tradable,Jetsum Logistics (synthetic),NASDAQ,common_stock,,2000-01-01,,,demo-seed
+JUNO,confirmed_tradable,Junova Education (synthetic),NASDAQ,common_stock,,2000-01-01,,,demo-seed
+LMNA,confirmed_tradable,Lumina Optics (synthetic),NASDAQ,common_stock,,2000-01-01,,,demo-seed
+LUXR,confirmed_tradable,Luxor Hotels (synthetic),NYSE American,common_stock,,2000-01-01,,,demo-seed
+MNTS,confirmed_tradable,Montis Labs (synthetic),NASDAQ,common_stock,,2000-01-01,,,demo-seed
+NMBS,confirmed_tradable,Nimbus Cloud (synthetic),NASDAQ,common_stock,,2000-01-01,,,demo-seed
+NMBS,confirmed_unavailable,Nimbus Cloud (synthetic),NASDAQ,common_stock,2026-09-21,2026-09-21,Removed from the game's list (demo example),,demo-seed
+ORCH,confirmed_tradable,Orchard Farms (synthetic),NASDAQ,common_stock,,2000-01-01,,,demo-seed
+PLSR,confirmed_tradable,Pulsar Imaging (synthetic),NYSE American,common_stock,,2000-01-01,,,demo-seed
+PYRX,confirmed_unavailable,Pyrex Gaming (synthetic),NASDAQ,common_stock,,2000-01-01,Not offered in this game (demo example: OTC / foreign listing),,demo-seed
+QBLT,confirmed_unavailable,Qubolt Energy (synthetic),NASDAQ,common_stock,,2000-01-01,Restricted security in this game (demo example),,demo-seed
+QNTM,confirmed_tradable,Quantum Drift (synthetic),NYSE,common_stock,,2000-01-01,,,demo-seed
+SLVR,confirmed_tradable,Silvera Metals (synthetic),NASDAQ,common_stock,,2000-01-01,,,demo-seed
+STRK,confirmed_tradable,Strika Cannabis (synthetic),NYSE,common_stock,,2000-01-01,,,demo-seed
+SYNQ,confirmed_tradable,Synqra Software (synthetic),NYSE American,common_stock,,2000-01-01,,,demo-seed
+UVXA,confirmed_unavailable,Uvexa Genomics (synthetic),NASDAQ,common_stock,,2000-01-01,Not offered in this game (demo example: OTC / foreign listing),,demo-seed
+WVRN,confirmed_unavailable,Waveron Wireless (synthetic),NASDAQ,common_stock,,2000-01-01,Not offered in this game (demo example: OTC / foreign listing),,demo-seed
+XRTL,confirmed_tradable,Xertal Aerospace (synthetic),NYSE American,common_stock,,2000-01-01,,,demo-seed
+YNDR,confirmed_tradable,Yondar Retail (synthetic),NASDAQ,common_stock,,2000-01-01,,,demo-seed
+ZNTR,confirmed_tradable,Zentra Dynamics (synthetic),NASDAQ,common_stock,,2000-01-01,,,demo-seed
+ZPHR,confirmed_unavailable,Zephyra Apparel (synthetic),NYSE American,common_stock,,2000-01-01,Restricted security in this game (demo example),,demo-seed
