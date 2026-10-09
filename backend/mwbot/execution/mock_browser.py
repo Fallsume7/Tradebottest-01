@@ -63,6 +63,12 @@ def _money(text: str) -> float:
     return float(m.group(0).replace(",", ""))
 
 
+def _needs_no_sandbox() -> bool:
+    """Chromium refuses to run as root (containers/CI) without --no-sandbox. Not applicable on Windows."""
+    geteuid = getattr(os, "geteuid", None)
+    return bool(os.environ.get("CI")) or (geteuid is not None and geteuid() == 0)
+
+
 def _on_worker(method):
     """Run an adapter method on the adapter's dedicated browser thread.
 
@@ -128,7 +134,7 @@ class MockBrowserAdapter(ExecutionAdapter):
         kwargs: dict[str, Any] = {
             "headless": self._headless,
             "slow_mo": self._slow_mo,
-            "args": ["--no-sandbox"] if os.environ.get("CI") or os.geteuid() == 0 else [],
+            "args": ["--no-sandbox"] if _needs_no_sandbox() else [],
         }
         if self._exe:
             kwargs["executable_path"] = self._exe
