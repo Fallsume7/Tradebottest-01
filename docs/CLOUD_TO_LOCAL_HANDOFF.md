@@ -28,8 +28,9 @@ _Latest numbers (after the eligibility / predictive / two-mode / dashboard work)
 | Check | Result |
 |---|---|
 | `ruff check` / `ruff format --check` / `mypy mwbot` (47 files) | clean |
-| Backend tests | **259 passed** (235 non-browser + 24 Playwright browser tests), ≈5 min |
-| Frontend `tsc --noEmit` (strict) / `vitest` / `vite build` | clean / **27 passed** / built |
+| Backend tests | **383 passed** (356 non-browser + 27 Playwright browser tests incl. the new dashboard E2E), ≈15 min |
+| Frontend `tsc --noEmit` (strict) / `vitest` / `vite build` | clean / **38 passed** / built |
+| `ruff check` / `ruff format --check` / `mypy mwbot` (64 files) | clean |
 | Real `mwbot serve` | started; served the built dashboard; a full instant synthetic day ran over HTTP |
 | End-to-end demo (below) | completed; HTTP-driven day equals headless CLI day (equity $99,765.15, 9 trades) |
 | Backtest reproducibility | two CLI runs ⇒ identical result hash `7fd8f6b000070c52…` and byte-identical trade CSVs |
@@ -92,3 +93,14 @@ claude                                      # Claude Code reads CLAUDE.md automa
 ```
 
 Suggested first prompt: *"Read CLAUDE.md and docs/CLOUD_TO_LOCAL_HANDOFF.md. Run scripts\test.ps1 -SkipBrowser and fix anything Windows-specific. Then help me verify the Massive provider with my key (in .env)."* Keep secrets in `.env`; never paste keys into chat or commit them.
+
+## 9. Eligibility / predictive / two-mode / dashboard work: status
+
+**Tested** (automated): eligibility states, point-in-time lookups, CSV, persistence, scanner gating (unavailable/unverified can never become actionable), holdings still sold when eligibility changes, best-ranked-stock-unavailable, yesterday's-winner-vs-flat-stock ranking, profit target, stop-loss, forecast change during the session and forecast exits, no entries near the close, unfilled entry, mode presets/switching with open positions, `tighten_only`, pause/resume/stop/emergency, risk limits, game order types/commissions, live settings changes, settings validation/preview/reset/import/export through the API, forecast features/calibration/walk-forward (no model can be called validated on the sample), backtest eligibility handling, mode comparison, and the real-browser dashboard workflow (desktop, tablet, phone widths, no horizontal scroll).
+
+**Honest caveats**
+* On the bundled synthetic sample (bar-only, assumed 40 bps spread) the default mode takes **no trades**: the modelled cost exceeds the rule-based model's edge. On the live demo market (quotes available) it trades roughly once a day with mixed results. Neither says anything about real markets.
+* No forecast model is validated. The Strategy Lab model check is the way to find out on real data you download; it needs 10+ out-of-sample sessions before any model may be labelled validated.
+* Eligibility must be maintained by you (dashboard or CSV). Automatic checking against MarketWatch is **not implemented** by design.
+* The optional gradient-boosted model needs `pip install -e "backend[ml]"` and has only been exercised on synthetic data.
+* Stop (bot) keeps managing open positions until flat; there is deliberately no "stop monitoring while holding" option.
