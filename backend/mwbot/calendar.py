@@ -164,7 +164,7 @@ def build_schedule(d: date, cfg: ScheduleConfig) -> SessionSchedule | None:
     close = sess.close_utc
     final_check = close - timedelta(minutes=cfg.final_check_minutes_before_close)
     # Early close: configured wall-clock milestones may land after the close; clamp them.
-    liquidation = min(chicago_to_utc(d, cfg.liquidation_start), close - timedelta(minutes=cfg.final_check_minutes_before_close + 15))
+    liquidation = min(chicago_to_utc(d, cfg.liquidation_start), final_check - timedelta(minutes=10))
     last_entry = min(chicago_to_utc(d, cfg.last_entry), liquidation)
     entries_start = sess.open_utc + timedelta(minutes=cfg.observe_minutes)
     entries_start = min(entries_start, last_entry)

@@ -223,6 +223,7 @@ class TradingBot:
 
         self._drain_broker_events(now)
         rep.equity = self.broker.equity()
+        self.broker._persist()  # latest marks + any orders submitted this tick survive a crash/restart
         return rep
 
     def _drain_broker_events(self, now: datetime) -> None:

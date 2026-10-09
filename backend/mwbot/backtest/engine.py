@@ -15,7 +15,7 @@ import hashlib
 import json
 import logging
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from datetime import date
 from typing import Any
 
@@ -90,7 +90,7 @@ class BacktestResult:
     def to_dict(self, include_trades: bool = True) -> dict[str, Any]:
         d: dict[str, Any] = {
             "id": self.id, "config": self.config, "feed": self.feed,
-            "days": [dd.__dict__ for dd in self.days], "equity_curve": self.equity_curve,
+            "days": [asdict(dd) for dd in self.days], "equity_curve": self.equity_curve,
             "summary": self.summary, "warnings": self.warnings, "result_hash": self.result_hash,
         }
         if include_trades:
