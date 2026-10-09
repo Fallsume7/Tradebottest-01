@@ -9,10 +9,11 @@ from datetime import date
 from pathlib import Path
 
 from mwbot.config import EnvSettings
+from mwbot.data.base import MarketDataProvider
 from mwbot.logging_setup import configure_logging
 
 
-def _provider(env: EnvSettings, dataset: str | None):  # type: ignore[no-untyped-def]
+def _provider(env: EnvSettings, dataset: str | None) -> MarketDataProvider:
     from mwbot.data.csv_provider import CsvHistoricalProvider
     from mwbot.data.synthetic import SyntheticProvider
 
@@ -26,8 +27,13 @@ def cmd_serve(args: argparse.Namespace) -> int:
 
     env = EnvSettings()
     configure_logging(env.log_level, env.log_json)
-    uvicorn.run("mwbot.api.app:app_factory", factory=True, host=args.host or env.host, port=args.port or env.port,
-                log_level=env.log_level.lower())
+    uvicorn.run(
+        "mwbot.api.app:app_factory",
+        factory=True,
+        host=args.host or env.host,
+        port=args.port or env.port,
+        log_level=env.log_level.lower(),
+    )
     return 0
 
 
@@ -60,7 +66,9 @@ def cmd_backtest(args: argparse.Namespace) -> int:
     provider = _provider(env, args.dataset)
     cfg = BacktestConfig(name=args.name, strategies=args.strategies, oos_fraction=args.oos)
     res = run_backtest(provider, cfg)
-    print(json.dumps({k: v for k, v in res.summary.items() if not isinstance(v, dict)}, indent=2, default=str))
+    print(
+        json.dumps({k: v for k, v in res.summary.items() if not isinstance(v, dict)}, indent=2, default=str)
+    )
     for w in res.warnings:
         print("WARNING:", w, file=sys.stderr)
     if args.out:
@@ -75,8 +83,13 @@ def cmd_backtest(args: argparse.Namespace) -> int:
 def cmd_make_sample(args: argparse.Namespace) -> int:
     from mwbot.data.synthetic import write_sample_dataset
 
-    out = write_sample_dataset(Path(args.out), date.fromisoformat(args.start), date.fromisoformat(args.end),
-                               seed=args.seed, n_symbols=args.symbols)
+    out = write_sample_dataset(
+        Path(args.out),
+        date.fromisoformat(args.start),
+        date.fromisoformat(args.end),
+        seed=args.seed,
+        n_symbols=args.symbols,
+    )
     print(f"wrote SYNTHETIC dataset to {out}")
     return 0
 
@@ -86,7 +99,9 @@ def cmd_download(args: argparse.Namespace) -> int:
 
     env = EnvSettings()
     client = MassiveClient(env.massive_api_key, env.massive_base_url)
-    out = download_dataset(client, args.symbols, date.fromisoformat(args.start), date.fromisoformat(args.end), Path(args.out))
+    out = download_dataset(
+        client, args.symbols, date.fromisoformat(args.start), date.fromisoformat(args.end), Path(args.out)
+    )
     print(f"wrote dataset to {out}")
     return 0
 
@@ -107,7 +122,11 @@ def main(argv: list[str] | None = None) -> int:
 
     b = sub.add_parser("backtest", help="run a backtest on a dataset (or 'demo')")
     b.add_argument("--dataset", default="synthetic_sample")
-    b.add_argument("--strategies", nargs="+", default=["opening_momentum", "gap_continuation", "momentum_breakout", "volume_surge"])
+    b.add_argument(
+        "--strategies",
+        nargs="+",
+        default=["opening_momentum", "gap_continuation", "momentum_breakout", "volume_surge"],
+    )
     b.add_argument("--oos", type=float, default=0.3)
     b.add_argument("--name", default="cli-backtest")
     b.add_argument("--out")

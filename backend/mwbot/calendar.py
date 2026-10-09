@@ -34,7 +34,9 @@ def is_trading_day(d: date) -> bool:
     cal = _calendar()
     ts = pd.Timestamp(d)
     if ts < cal.first_session or ts > cal.last_session:
-        raise ValueError(f"{d} is outside the calendar range {cal.first_session.date()}..{cal.last_session.date()}")
+        raise ValueError(
+            f"{d} is outside the calendar range {cal.first_session.date()}..{cal.last_session.date()}"
+        )
     return bool(cal.is_session(ts))
 
 

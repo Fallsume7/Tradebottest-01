@@ -63,8 +63,14 @@ class MassiveClient:
 
     def get(self, path: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
         return request_json(
-            self._client, "GET", path, params=params, max_retries=self._max_retries,
-            sleep=self._sleep, limiter=self._limiter, jitter=False,
+            self._client,
+            "GET",
+            path,
+            params=params,
+            max_retries=self._max_retries,
+            sleep=self._sleep,
+            limiter=self._limiter,
+            jitter=False,
         )
 
     def close(self) -> None:
@@ -99,12 +105,20 @@ def parse_aggregates(data: dict[str, Any]) -> pd.DataFrame:
     """Aggregates JSON -> UTC-indexed OHLCV frame. Rows with bad OHLC are dropped."""
     rows = data.get("results") or []
     if not rows:
-        return pd.DataFrame(columns=["open", "high", "low", "close", "volume"],
-                            index=pd.DatetimeIndex([], tz="UTC", name="timestamp"))
-    df = pd.DataFrame(rows).rename(columns={"o": "open", "h": "high", "l": "low", "c": "close", "v": "volume", "t": "ts"})
+        return pd.DataFrame(
+            columns=["open", "high", "low", "close", "volume"],
+            index=pd.DatetimeIndex([], tz="UTC", name="timestamp"),
+        )
+    df = pd.DataFrame(rows).rename(
+        columns={"o": "open", "h": "high", "l": "low", "c": "close", "v": "volume", "t": "ts"}
+    )
     df["timestamp"] = pd.to_datetime(df["ts"], unit="ms", utc=True)
     df = df.set_index("timestamp")[["open", "high", "low", "close", "volume"]].astype(float)
-    bad = (df["high"] < df[["open", "close"]].max(axis=1)) | (df["low"] > df[["open", "close"]].min(axis=1)) | (df["low"] <= 0)
+    bad = (
+        (df["high"] < df[["open", "close"]].max(axis=1))
+        | (df["low"] > df[["open", "close"]].min(axis=1))
+        | (df["low"] <= 0)
+    )
     if bad.any():
         log.warning("dropped malformed aggregate rows", extra={"count": int(bad.sum())})
     return df[~bad].sort_index()
@@ -113,7 +127,9 @@ def parse_aggregates(data: dict[str, Any]) -> pd.DataFrame:
 class MassiveLiveSource(MarketDataSource):
     """Live (or delayed) session built from the gainers snapshot + minute aggregates."""
 
-    def __init__(self, client: MassiveClient, session: SessionInfo, feed: FeedInfo, max_candidates: int = 30) -> None:
+    def __init__(
+        self, client: MassiveClient, session: SessionInfo, feed: FeedInfo, max_candidates: int = 30
+    ) -> None:
         self.client = client
         self.session = session
         self._feed = feed
@@ -203,7 +219,11 @@ class MassiveLiveSource(MarketDataSource):
             )
             out.append(
                 StockContext(
-                    meta=meta, bars=bars, as_of=as_of, session=self.session, quote=quote,
+                    meta=meta,
+                    bars=bars,
+                    as_of=as_of,
+                    session=self.session,
+                    quote=quote,
                     halted=False,  # the snapshot endpoint does not report halts: genuinely unknown
                     data_age_seconds=(as_of - last_label).total_seconds() if last_label else float("inf"),
                     feed=self._feed,
@@ -235,17 +255,25 @@ class MassiveProvider(MarketDataProvider):
         transport: httpx.BaseTransport | None = None,
         sleep: Callable[[float], None] = time.sleep,
     ) -> None:
-        self.client = MassiveClient(api_key, base_url, calls_per_second=calls_per_second, transport=transport, sleep=sleep)
+        self.client = MassiveClient(
+            api_key, base_url, calls_per_second=calls_per_second, transport=transport, sleep=sleep
+        )
         self._feed_kind = FeedKind.REALTIME if feed == "realtime" else FeedKind.DELAYED
         self._delay = 0 if feed == "realtime" else delay_seconds
 
     def feed_info(self) -> FeedInfo:
         if self._feed_kind == FeedKind.REALTIME:
-            return FeedInfo(FeedKind.REALTIME, self.name, "Massive - real-time (as configured; verify your plan)")
+            return FeedInfo(
+                FeedKind.REALTIME, self.name, "Massive - real-time (as configured; verify your plan)"
+            )
         return FeedInfo(
-            FeedKind.DELAYED, self.name, f"Massive - DELAYED ~{self._delay // 60} min (as configured)",
+            FeedKind.DELAYED,
+            self.name,
+            f"Massive - DELAYED ~{self._delay // 60} min (as configured)",
             delay_seconds=self._delay,
-            warnings=["Delayed data: new positions are blocked unless 'allow trading on delayed feed' is enabled."],
+            warnings=[
+                "Delayed data: new positions are blocked unless 'allow trading on delayed feed' is enabled."
+            ],
         )
 
     def available_dates(self) -> list[date] | None:
@@ -263,7 +291,9 @@ class MassiveProvider(MarketDataProvider):
         return MassiveLiveSource(self.client, session, self.feed_info())
 
 
-def download_dataset(client: MassiveClient, symbols: list[str], start: date, end: date, out_dir: Path) -> Path:
+def download_dataset(
+    client: MassiveClient, symbols: list[str], start: date, end: date, out_dir: Path
+) -> Path:
     """Download adjusted 1-minute bars into a historical-mode dataset directory (real data, user's key)."""
     import json
 
@@ -282,8 +312,17 @@ def download_dataset(client: MassiveClient, symbols: list[str], start: date, end
     pd.concat(frames).sort_index().to_csv(out_dir / "bars.csv.gz", index_label="timestamp")
     (out_dir / "manifest.json").write_text(
         json.dumps(
-            {"name": f"massive-{start}-{end}", "synthetic": False, "timezone": "UTC", "adjusted": True,
-             "source": "massive aggregates (adjusted=true)", "symbols": symbols}, indent=2) + "\n",
+            {
+                "name": f"massive-{start}-{end}",
+                "synthetic": False,
+                "timezone": "UTC",
+                "adjusted": True,
+                "source": "massive aggregates (adjusted=true)",
+                "symbols": symbols,
+            },
+            indent=2,
+        )
+        + "\n",
         encoding="utf-8",
     )
     return out_dir

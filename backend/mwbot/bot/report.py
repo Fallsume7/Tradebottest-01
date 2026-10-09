@@ -9,8 +9,12 @@ if TYPE_CHECKING:
     from mwbot.bot.engine import TradingBot
 
 
-def build_daily_report(bot: TradingBot, session_date: str, unresolved: list[dict[str, Any]],
-                       reconciliation: dict[str, Any] | None) -> dict[str, Any]:
+def build_daily_report(
+    bot: TradingBot,
+    session_date: str,
+    unresolved: list[dict[str, Any]],
+    reconciliation: dict[str, Any] | None,
+) -> dict[str, Any]:
     assert bot.stats is not None
     b = bot.broker
     start_eq = bot.stats.start_equity
@@ -55,16 +59,27 @@ def report_markdown(r: dict[str, Any]) -> str:
         f"- Start equity: ${r['start_equity']:,.2f}",
         f"- End equity: ${r['end_equity']:,.2f}",
         f"- P/L: ${r['pnl']:+,.2f} ({r['pnl_pct']:+.2f}%)",
-        f"- Trades: {r['n_trades']}" + (f" (win rate {r['win_rate'] * 100:.0f}%)" if r["win_rate"] is not None else ""),
+        f"- Trades: {r['n_trades']}"
+        + (f" (win rate {r['win_rate'] * 100:.0f}%)" if r["win_rate"] is not None else ""),
         f"- Liquidation complete: {'yes' if r['liquidation_complete'] else 'NO - see unresolved positions'}",
         "",
     ]
     if r["unresolved_positions"]:
         lines += ["## Unresolved positions", ""]
-        lines += [f"- {u['symbol']} x{u['quantity']} (unrealized {u['unrealized_pnl']:+.2f})" for u in r["unresolved_positions"]]
+        lines += [
+            f"- {u['symbol']} x{u['quantity']} (unrealized {u['unrealized_pnl']:+.2f})"
+            for u in r["unresolved_positions"]
+        ]
         lines.append("")
-    lines += ["## Trades", "", "| Symbol | Strategy | Qty | Entry | Exit | Net P/L | Exit reason |", "|---|---|---|---|---|---|---|"]
+    lines += [
+        "## Trades",
+        "",
+        "| Symbol | Strategy | Qty | Entry | Exit | Net P/L | Exit reason |",
+        "|---|---|---|---|---|---|---|",
+    ]
     for t in r["trades"]:
-        lines.append(f"| {t['symbol']} | {t['strategy']} | {t['quantity']} | {t['entry_price']} | {t['exit_price']} | {t['net_pnl']:+.2f} | {t['exit_reason']} |")
+        lines.append(
+            f"| {t['symbol']} | {t['strategy']} | {t['quantity']} | {t['entry_price']} | {t['exit_price']} | {t['net_pnl']:+.2f} | {t['exit_reason']} |"
+        )
     lines += ["", f"_{r['disclaimer']}_", ""]
     return "\n".join(lines)

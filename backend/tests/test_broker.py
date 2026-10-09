@@ -11,7 +11,13 @@ from mwbot.trading.broker import PaperBroker
 
 from .conftest import TEST_DAY, at, build_day, make_source, meta  # noqa: F401
 
-FREE = CostConfig(slippage_bps=0, assumed_spread_bps=0, impact_bps_per_pct_participation=0, latency_seconds=0, max_participation=1.0)
+FREE = CostConfig(
+    slippage_bps=0,
+    assumed_spread_bps=0,
+    impact_bps_per_pct_participation=0,
+    latency_seconds=0,
+    max_participation=1.0,
+)
 
 
 @pytest.fixture()
@@ -30,7 +36,9 @@ def world(session_info):
 
 
 def buy(b, now, qty=100, cid="b1", **kw):
-    return b.submit(OrderRequest(cid, "TST", Side.BUY, qty, meta={"stop_loss_pct": 5, "take_profit_pct": 10}, **kw), now)
+    return b.submit(
+        OrderRequest(cid, "TST", Side.BUY, qty, meta={"stop_loss_pct": 5, "take_profit_pct": 10}, **kw), now
+    )
 
 
 def test_buy_then_sell_round_trip_accounting(world, session_info):
@@ -42,12 +50,20 @@ def test_buy_then_sell_round_trip_accounting(world, session_info):
     b.process(src, t + timedelta(minutes=2))
     assert o.status == OrderStatus.FILLED and o.avg_fill_price == pytest.approx(10.0)
     pos = b.positions["TST"]
-    assert pos.quantity == 100 and pos.stop_price == pytest.approx(9.5) and pos.take_profit_price == pytest.approx(11.0)
+    assert (
+        pos.quantity == 100
+        and pos.stop_price == pytest.approx(9.5)
+        and pos.take_profit_price == pytest.approx(11.0)
+    )
     assert b.cash == pytest.approx(99_000)
     s = b.submit(OrderRequest("s1", "TST", Side.SELL, 100, reason="test exit"), t + timedelta(minutes=3))
     b.process(src, t + timedelta(minutes=6))
     assert s.status == OrderStatus.FILLED and "TST" not in b.positions
-    assert len(b.trades) == 1 and b.trades[0].net_pnl == pytest.approx(0.0) and b.trades[0].exit_reason == "test exit"
+    assert (
+        len(b.trades) == 1
+        and b.trades[0].net_pnl == pytest.approx(0.0)
+        and b.trades[0].exit_reason == "test exit"
+    )
     assert b.cash == pytest.approx(100_000)
 
 
@@ -56,9 +72,11 @@ def test_never_fills_on_the_signal_bar(world, session_info):
     b = new(CostConfig(latency_seconds=5, slippage_bps=0, assumed_spread_bps=0))
     t = at(session_info, 10)
     o = buy(b, t)
-    b.process(src, t)                      # nothing complete yet
+    b.process(src, t)  # nothing complete yet
     assert o.filled_quantity == 0
-    b.process(src, t + timedelta(minutes=1))  # bar labelled t completes, but order only eligible t+5s -> bar t+1m
+    b.process(
+        src, t + timedelta(minutes=1)
+    )  # bar labelled t completes, but order only eligible t+5s -> bar t+1m
     assert o.filled_quantity == 0
     b.process(src, t + timedelta(minutes=2))
     assert o.status == OrderStatus.FILLED
@@ -103,8 +121,17 @@ def test_pending_buys_reserve_buying_power(world, session_info):
 def test_partial_fills_accumulate_across_bars(session_info):
     bars = build_day(session_info, 10.0, [], base_volume=1_000, wiggle=0.0)
     src = make_source(session_info, {"TST": (meta(), bars)}, spread_bps=0)
-    b = PaperBroker(100_000, CostConfig(slippage_bps=0, assumed_spread_bps=0, impact_bps_per_pct_participation=0,
-                                        latency_seconds=0, max_participation=0.10, min_fill_volume=100))
+    b = PaperBroker(
+        100_000,
+        CostConfig(
+            slippage_bps=0,
+            assumed_spread_bps=0,
+            impact_bps_per_pct_participation=0,
+            latency_seconds=0,
+            max_participation=0.10,
+            min_fill_volume=100,
+        ),
+    )
     b.mark("TST", 10.0)
     t = at(session_info, 10)
     o = buy(b, t, 250)
@@ -118,7 +145,9 @@ def test_partial_fills_accumulate_across_bars(session_info):
 def test_ioc_cancels_unfilled_remainder(session_info):
     bars = build_day(session_info, 10.0, [], base_volume=1_000, wiggle=0.0)
     src = make_source(session_info, {"TST": (meta(), bars)}, spread_bps=0)
-    b = PaperBroker(100_000, CostConfig(max_participation=0.10, latency_seconds=0, slippage_bps=0, assumed_spread_bps=0))
+    b = PaperBroker(
+        100_000, CostConfig(max_participation=0.10, latency_seconds=0, slippage_bps=0, assumed_spread_bps=0)
+    )
     b.mark("TST", 10.0)
     t = at(session_info, 10)
     o = b.submit(OrderRequest("i", "TST", Side.BUY, 500, time_in_force=TimeInForce.IOC), t)
@@ -128,8 +157,12 @@ def test_ioc_cancels_unfilled_remainder(session_info):
 
 def test_halt_blocks_fills_until_resume(session_info):
     bars = build_day(session_info, 10.0, [], base_volume=100_000, wiggle=0.0)
-    src = make_source(session_info, {"TST": (meta(), bars)}, spread_bps=0,
-                      halts={"TST": [(at(session_info, 10), at(session_info, 15))]})
+    src = make_source(
+        session_info,
+        {"TST": (meta(), bars)},
+        spread_bps=0,
+        halts={"TST": [(at(session_info, 10), at(session_info, 15))]},
+    )
     b = PaperBroker(100_000, FREE)
     b.mark("TST", 10.0)
     o = buy(b, at(session_info, 10))
@@ -145,7 +178,11 @@ def test_day_order_expires_unfilled_and_is_reported(session_info):
     b = PaperBroker(100_000, FREE)
     b.mark("TST", 10.0)
     t = at(session_info, 10)
-    o = b.submit(OrderRequest("lim", "TST", Side.BUY, 10, OrderType.LIMIT, limit_price=5.0), t, expires_at=at(session_info, 30))
+    o = b.submit(
+        OrderRequest("lim", "TST", Side.BUY, 10, OrderType.LIMIT, limit_price=5.0),
+        t,
+        expires_at=at(session_info, 30),
+    )
     b.process(src, at(session_info, 31))
     assert o.status == OrderStatus.EXPIRED
     assert any(e["kind"] == "order_expired" for e in b.drain_events())
@@ -163,8 +200,17 @@ def test_cancel_pending_order(world, session_info):
 def test_commissions_reduce_pnl(session_info):
     bars = build_day(session_info, 10.0, [], base_volume=100_000, wiggle=0.0)
     src = make_source(session_info, {"TST": (meta(), bars)}, spread_bps=0)
-    b = PaperBroker(100_000, CostConfig(commission_per_share=0.01, slippage_bps=0, assumed_spread_bps=0,
-                                        impact_bps_per_pct_participation=0, latency_seconds=0, max_participation=1.0))
+    b = PaperBroker(
+        100_000,
+        CostConfig(
+            commission_per_share=0.01,
+            slippage_bps=0,
+            assumed_spread_bps=0,
+            impact_bps_per_pct_participation=0,
+            latency_seconds=0,
+            max_participation=1.0,
+        ),
+    )
     b.mark("TST", 10.0)
     t = at(session_info, 10)
     buy(b, t, 1000)
@@ -172,7 +218,11 @@ def test_commissions_reduce_pnl(session_info):
     b.submit(OrderRequest("s", "TST", Side.SELL, 1000), t + timedelta(minutes=3))
     b.process(src, t + timedelta(minutes=6))
     tr = b.trades[0]
-    assert tr.gross_pnl == pytest.approx(0) and tr.commissions == pytest.approx(20) and tr.net_pnl == pytest.approx(-20)
+    assert (
+        tr.gross_pnl == pytest.approx(0)
+        and tr.commissions == pytest.approx(20)
+        and tr.net_pnl == pytest.approx(-20)
+    )
     assert b.cash == pytest.approx(100_000 - 20)
 
 
@@ -189,7 +239,15 @@ def test_equity_equals_cash_plus_marked_positions(world, session_info):
 
 def test_force_flatten_closes_with_costs_and_logs_trade(world, session_info):
     src, new = world
-    b = new(CostConfig(slippage_bps=10, assumed_spread_bps=0, impact_bps_per_pct_participation=0, latency_seconds=0, max_participation=1.0))
+    b = new(
+        CostConfig(
+            slippage_bps=10,
+            assumed_spread_bps=0,
+            impact_bps_per_pct_participation=0,
+            latency_seconds=0,
+            max_participation=1.0,
+        )
+    )
     t = at(session_info, 10)
     buy(b, t, 100)
     b.process(src, t + timedelta(minutes=2))
@@ -199,9 +257,16 @@ def test_force_flatten_closes_with_costs_and_logs_trade(world, session_info):
 
 
 def test_reconcile_holdings_report():
-    rep = reconcile_holdings([Holding("A", 10), Holding("B", 5), Holding("C", 1)], [Holding("A", 10), Holding("B", 4), Holding("D", 2)])
+    rep = reconcile_holdings(
+        [Holding("A", 10), Holding("B", 5), Holding("C", 1)],
+        [Holding("A", 10), Holding("B", 4), Holding("D", 2)],
+    )
     assert not rep.ok and rep.matched == ["A"]
-    assert rep.quantity_mismatches == [("B", 5, 4)] and rep.missing_externally == ["C"] and rep.missing_internally == ["D"]
+    assert (
+        rep.quantity_mismatches == [("B", 5, 4)]
+        and rep.missing_externally == ["C"]
+        and rep.missing_internally == ["D"]
+    )
     assert reconcile_holdings([Holding("A", 1)], [Holding("A", 1)]).ok
 
 

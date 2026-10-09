@@ -27,7 +27,8 @@ def page(title: str, body: str, nav: bool = True) -> HTMLResponse:
     links = (
         '<a href="/portfolio" id="nav-portfolio">Portfolio</a><a href="/trade" id="nav-trade">Trade</a>'
         '<a href="/orders" id="nav-orders">Orders</a><a href="/logout" id="nav-logout">Log out</a>'
-        if nav else ""
+        if nav
+        else ""
     )
     return HTMLResponse(
         f"<!doctype html><html><head><meta charset='utf-8'><title>{html.escape(title)}</title><style>{CSS}</style></head>"
@@ -64,11 +65,15 @@ def create_mock_app(exchange: MockExchange | None = None) -> FastAPI:
             msg = "<div class='error' id='login-error'>Your session has expired. Please log in again.</div>"
         elif error:
             msg = f"<div class='error' id='login-error'>{html.escape(error)}</div>"
-        return page("Log in", f"""<div class='card'><h2>Log in</h2>{msg}
+        return page(
+            "Log in",
+            f"""<div class='card'><h2>Log in</h2>{msg}
             <form method='post' action='/login'>
             <div><label>Username <input id='username' name='username' autocomplete='off'></label></div>
             <div><label>Password <input id='password' name='password' type='password'></label></div>
-            <button id='login-btn' type='submit'>Log in</button></form></div>""", nav=False)
+            <button id='login-btn' type='submit'>Log in</button></form></div>""",
+            nav=False,
+        )
 
     @app.post("/login")
     def login(username: str = Form(""), password: str = Form("")) -> Response:
@@ -94,17 +99,22 @@ def create_mock_app(exchange: MockExchange | None = None) -> FastAPI:
         rows = ""
         for sym, h in sorted(ex.holdings.items()):
             avg = h["cost"] / h["qty"]
-            rows += (f"<tr class='holding' data-symbol='{sym}' data-qty='{int(h['qty'])}' data-avg='{avg:.4f}'>"
-                     f"<td>{sym}</td><td class='qty'>{int(h['qty'])}</td><td>{money(avg)}</td>"
-                     f"<td>{money(ex.prices[sym])}</td><td>{money(h['qty'] * ex.prices[sym])}</td></tr>")
+            rows += (
+                f"<tr class='holding' data-symbol='{sym}' data-qty='{int(h['qty'])}' data-avg='{avg:.4f}'>"
+                f"<td>{sym}</td><td class='qty'>{int(h['qty'])}</td><td>{money(avg)}</td>"
+                f"<td>{money(ex.prices[sym])}</td><td>{money(h['qty'] * ex.prices[sym])}</td></tr>"
+            )
         if not rows:
             rows = "<tr><td colspan='5' id='no-holdings'>You have no holdings.</td></tr>"
-        return page("Portfolio", f"""<div class='card'><h2>Portfolio</h2>
+        return page(
+            "Portfolio",
+            f"""<div class='card'><h2>Portfolio</h2>
             <p>Cash: <strong id='cash-balance' data-value='{snap["cash"]:.2f}'>{money(snap["cash"])}</strong></p>
             <p>Buying power: <strong id='buying-power' data-value='{snap["buying_power"]:.2f}'>{money(snap["buying_power"])}</strong></p>
             <p>Portfolio value: <strong id='portfolio-value'>{money(snap["total"])}</strong></p></div>
             <div class='card'><table id='holdings'><thead><tr><th>Symbol</th><th>Shares</th><th>Avg cost</th><th>Last</th><th>Value</th></tr></thead>
-            <tbody>{rows}</tbody></table></div>""")
+            <tbody>{rows}</tbody></table></div>""",
+        )
 
     @app.get("/trade", response_class=HTMLResponse)
     def trade(request: Request, symbol: str = "", error: str = "") -> Response:
@@ -127,34 +137,54 @@ def create_mock_app(exchange: MockExchange | None = None) -> FastAPI:
                   <div><label>Order type <select id='order-type' name='order_type'><option value='market'>Market</option><option value='limit'>Limit</option></select></label></div>
                   <div><label>Limit price <input id='limit-price' name='limit_price' type='number' step='0.01'></label></div>
                   <button id='preview-btn' type='submit'>Preview order</button></form></div>"""
-        return page("Trade", f"""<div class='card'><h2>Trade</h2>{err}
+        return page(
+            "Trade",
+            f"""<div class='card'><h2>Trade</h2>{err}
             <form method='get' action='/trade'><label>Ticker <input id='symbol-input' name='symbol' value='{html.escape(symbol)}' autocomplete='off'></label>
-            <button id='search-btn' type='submit'>Search</button></form></div>{quote_html}""")
+            <button id='search-btn' type='submit'>Search</button></form></div>{quote_html}""",
+        )
 
     @app.post("/trade/preview")
-    def preview(request: Request, symbol: str = Form(""), side: str = Form("buy"), quantity: int = Form(0),
-                order_type: str = Form("market"), limit_price: str = Form("")) -> Response:
+    def preview(
+        request: Request,
+        symbol: str = Form(""),
+        side: str = Form("buy"),
+        quantity: int = Form(0),
+        order_type: str = Form("market"),
+        limit_price: str = Form(""),
+    ) -> Response:
         if (g := guard(request)) is not None:
             return g
         lp = float(limit_price) if limit_price.strip() else None
         err = ex.validate(symbol, side, quantity, order_type, lp)
         if err:
-            return RedirectResponse(f"/trade?symbol={quote_plus(symbol)}&error={quote_plus(err)}", status_code=303)
+            return RedirectResponse(
+                f"/trade?symbol={quote_plus(symbol)}&error={quote_plus(err)}", status_code=303
+            )
         px = ex.quote(symbol) or 0.0
         est = quantity * (lp if order_type == "limit" and lp else px)
-        return page("Confirm order", f"""<div class='card' id='confirm-card'><h2>Confirm your order</h2>
-            <p id='confirm-summary'>{side.upper()} {quantity} {symbol.upper()} ({order_type}{f' @ {lp:.2f}' if order_type == 'limit' and lp else ''})</p>
-            <p>Estimated {'cost' if side == 'buy' else 'proceeds'}: <strong id='confirm-estimate' data-value='{est:.2f}'>{money(est)}</strong></p>
+        return page(
+            "Confirm order",
+            f"""<div class='card' id='confirm-card'><h2>Confirm your order</h2>
+            <p id='confirm-summary'>{side.upper()} {quantity} {symbol.upper()} ({order_type}{f" @ {lp:.2f}" if order_type == "limit" and lp else ""})</p>
+            <p>Estimated {"cost" if side == "buy" else "proceeds"}: <strong id='confirm-estimate' data-value='{est:.2f}'>{money(est)}</strong></p>
             <form method='post' action='/trade/confirm'>
             <input type='hidden' name='symbol' value='{symbol.upper()}'><input type='hidden' name='side' value='{side}'>
             <input type='hidden' name='quantity' value='{quantity}'><input type='hidden' name='order_type' value='{order_type}'>
             <input type='hidden' name='limit_price' value='{limit_price}'>
             <button id='confirm-btn' type='submit'>Place order</button>
-            <a href='/trade?symbol={symbol.upper()}' id='cancel-btn'>Cancel</a></form></div>""")
+            <a href='/trade?symbol={symbol.upper()}' id='cancel-btn'>Cancel</a></form></div>""",
+        )
 
     @app.post("/trade/confirm")
-    def confirm(request: Request, symbol: str = Form(""), side: str = Form("buy"), quantity: int = Form(0),
-                order_type: str = Form("market"), limit_price: str = Form("")) -> Response:
+    def confirm(
+        request: Request,
+        symbol: str = Form(""),
+        side: str = Form("buy"),
+        quantity: int = Form(0),
+        order_type: str = Form("market"),
+        limit_price: str = Form(""),
+    ) -> Response:
         if (g := guard(request)) is not None:
             return g
         lp = float(limit_price) if limit_price.strip() else None
@@ -176,21 +206,39 @@ def create_mock_app(exchange: MockExchange | None = None) -> FastAPI:
 
         def row(o: object, pending: bool) -> str:
             from mwbot.mocksite.exchange import MockOrder
+
             assert isinstance(o, MockOrder)
-            cancel = (f"<form method='post' action='/orders/{o.id}/cancel' style='display:inline'>"
-                      f"<button class='cancel-btn' type='submit'>Cancel</button></form>") if pending else ""
-            return (f"<tr class='order' data-order-id='{o.id}' data-status='{o.status}' data-symbol='{o.symbol}' "
-                    f"data-side='{o.side}' data-qty='{o.quantity}' data-filled='{o.filled_quantity}' "
-                    f"data-price='{o.fill_price if o.fill_price is not None else ''}'>"
-                    f"<td>{o.id}</td><td>{o.side.upper()}</td><td>{o.symbol}</td><td>{o.quantity}</td><td>{o.order_type}</td>"
-                    f"<td class='status'>{o.status}</td><td>{html.escape(o.message)}</td><td>{cancel}</td></tr>")
+            cancel = (
+                (
+                    f"<form method='post' action='/orders/{o.id}/cancel' style='display:inline'>"
+                    f"<button class='cancel-btn' type='submit'>Cancel</button></form>"
+                )
+                if pending
+                else ""
+            )
+            return (
+                f"<tr class='order' data-order-id='{o.id}' data-status='{o.status}' data-symbol='{o.symbol}' "
+                f"data-side='{o.side}' data-qty='{o.quantity}' data-filled='{o.filled_quantity}' "
+                f"data-price='{o.fill_price if o.fill_price is not None else ''}'>"
+                f"<td>{o.id}</td><td>{o.side.upper()}</td><td>{o.symbol}</td><td>{o.quantity}</td><td>{o.order_type}</td>"
+                f"<td class='status'>{o.status}</td><td>{html.escape(o.message)}</td><td>{cancel}</td></tr>"
+            )
 
         allo = sorted(ex.orders.values(), key=lambda x: x.id, reverse=True)
-        pend = "".join(row(o, True) for o in allo if o.status == "pending") or "<tr><td colspan='8'>No pending orders</td></tr>"
-        done = "".join(row(o, False) for o in allo if o.status != "pending") or "<tr><td colspan='8'>No completed orders</td></tr>"
+        pend = (
+            "".join(row(o, True) for o in allo if o.status == "pending")
+            or "<tr><td colspan='8'>No pending orders</td></tr>"
+        )
+        done = (
+            "".join(row(o, False) for o in allo if o.status != "pending")
+            or "<tr><td colspan='8'>No completed orders</td></tr>"
+        )
         head = "<thead><tr><th>ID</th><th>Side</th><th>Symbol</th><th>Qty</th><th>Type</th><th>Status</th><th>Note</th><th></th></tr></thead>"
-        return page("Orders", f"""{banner}<div class='card'><h2>Pending orders</h2><table id='pending-orders'>{head}<tbody>{pend}</tbody></table></div>
-            <div class='card'><h2>Completed orders</h2><table id='completed-orders'>{head}<tbody>{done}</tbody></table></div>""")
+        return page(
+            "Orders",
+            f"""{banner}<div class='card'><h2>Pending orders</h2><table id='pending-orders'>{head}<tbody>{pend}</tbody></table></div>
+            <div class='card'><h2>Completed orders</h2><table id='completed-orders'>{head}<tbody>{done}</tbody></table></div>""",
+        )
 
     @app.post("/orders/{order_id}/cancel")
     def cancel(request: Request, order_id: str) -> Response:
@@ -230,7 +278,12 @@ def create_mock_app(exchange: MockExchange | None = None) -> FastAPI:
 
     @app.get("/admin/state")
     def admin_state() -> JSONResponse:
-        return JSONResponse({"snapshot": ex.snapshot(), "holdings": ex.holdings,
-                             "orders": {k: v.__dict__ for k, v in ex.orders.items()}})
+        return JSONResponse(
+            {
+                "snapshot": ex.snapshot(),
+                "holdings": ex.holdings,
+                "orders": {k: v.__dict__ for k, v in ex.orders.items()},
+            }
+        )
 
     return app

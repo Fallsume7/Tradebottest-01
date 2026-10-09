@@ -1,12 +1,11 @@
 import gzip
 import json
-from datetime import UTC, date, datetime, timedelta
+from datetime import date, datetime, timedelta
 
 import numpy as np
 import pandas as pd
 import pytest
 
-from mwbot.calendar import session_for
 from mwbot.data.base import DataUnavailableError
 from mwbot.data.csv_provider import CsvHistoricalProvider, DatasetError, detect_possible_splits
 from mwbot.data.profile import expected_fraction
@@ -82,7 +81,9 @@ def _write_dataset(tmp_path, rows, tz="UTC", adjusted=True, synthetic=False, met
     d = tmp_path / "ds"
     d.mkdir()
     pd.DataFrame(rows).to_csv(d / "bars.csv", index=False)
-    (d / "manifest.json").write_text(json.dumps({"name": "t", "timezone": tz, "adjusted": adjusted, "synthetic": synthetic}))
+    (d / "manifest.json").write_text(
+        json.dumps({"name": "t", "timezone": tz, "adjusted": adjusted, "synthetic": synthetic})
+    )
     if meta_rows:
         pd.DataFrame(meta_rows).to_csv(d / "meta.csv", index=False)
     return d
@@ -92,8 +93,22 @@ def _rows(day, sym="AAA", n=60, px=10.0, naive=False, tz_offset="-04:00", start_
     out = []
     t = datetime(day.year, day.month, day.day, *start_hm)
     for i in range(n):
-        ts = (t + timedelta(minutes=i)).isoformat() if naive else (t + timedelta(minutes=i)).isoformat() + tz_offset
-        out.append({"timestamp": ts, "symbol": sym, "open": px, "high": px + 0.05, "low": px - 0.05, "close": px, "volume": 1000})
+        ts = (
+            (t + timedelta(minutes=i)).isoformat()
+            if naive
+            else (t + timedelta(minutes=i)).isoformat() + tz_offset
+        )
+        out.append(
+            {
+                "timestamp": ts,
+                "symbol": sym,
+                "open": px,
+                "high": px + 0.05,
+                "low": px - 0.05,
+                "close": px,
+                "volume": 1000,
+            }
+        )
     return out
 
 
@@ -127,9 +142,9 @@ def test_csv_requires_manifest_with_timezone(tmp_path):
 def test_csv_drops_invalid_rows_and_duplicates_and_warns(tmp_path):
     d = date(2026, 10, 8)
     rows = _rows(d)
-    rows[5]["high"] = 1.0           # high below open/close
-    rows[6]["low"] = -1.0           # non-positive
-    rows.append(dict(rows[0]))       # duplicate
+    rows[5]["high"] = 1.0  # high below open/close
+    rows[6]["low"] = -1.0  # non-positive
+    rows.append(dict(rows[0]))  # duplicate
     p = CsvHistoricalProvider(_write_dataset(tmp_path, rows))
     assert any("Dropped 3" in w for w in p.warnings)
     assert len(p.open_session(d).full_day("AAA").bars) == 58
@@ -156,7 +171,7 @@ def test_csv_unavailable_date_raises(sample_provider):
 
 
 def test_split_detector():
-    s = pd.Series([10.0, 10.2, 5.1, 5.0, 15.1], index=pd.to_datetime(["2026-01-0%d" % i for i in range(1, 6)]))
+    s = pd.Series([10.0, 10.2, 5.1, 5.0, 15.1], index=pd.to_datetime([f"2026-01-0{i}" for i in range(1, 6)]))
     hits = detect_possible_splits(s)
     assert [h[0] for h in hits] == ["2026-01-03", "2026-01-05"] and hits[0][1] == pytest.approx(0.5, abs=0.02)
 

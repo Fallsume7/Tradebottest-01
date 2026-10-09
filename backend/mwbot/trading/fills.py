@@ -87,9 +87,8 @@ def try_fill(
             + costs.slippage_bps / 1e4
             + participation_pct * costs.impact_bps_per_pct_participation / 1e4
         )
-        if order.side == Side.BUY:
-            px = min(o * (1 + adverse), h)
-        else:
-            px = max(o * (1 - adverse), low)
+        px = min(o * (1 + adverse), h) if order.side == Side.BUY else max(o * (1 - adverse), low)
         note = f"market fill: open {o:.4f}, adverse {adverse * 1e4:.1f}bps, participation {participation_pct:.2f}%"
-    return FillResult(quantity=qty, price=round(px, 4), commission=commission_for(costs, qty, first), note=note)
+    return FillResult(
+        quantity=qty, price=round(px, 4), commission=commission_for(costs, qty, first), note=note
+    )

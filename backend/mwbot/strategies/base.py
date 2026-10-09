@@ -73,11 +73,15 @@ class Evaluation:
 
     def to_dict(self) -> dict[str, Any]:
         return {
-            "strategy": self.strategy, "symbol": self.symbol, "passed": self.passed,
+            "strategy": self.strategy,
+            "symbol": self.symbol,
+            "passed": self.passed,
             "strength": round(self.strength, 3),
             "conditions": [c.to_dict() for c in self.conditions],
-            "stop_loss_pct": self.stop_loss_pct, "take_profit_pct": self.take_profit_pct,
-            "trailing_stop_pct": self.trailing_stop_pct, "max_hold_minutes": self.max_hold_minutes,
+            "stop_loss_pct": self.stop_loss_pct,
+            "take_profit_pct": self.take_profit_pct,
+            "trailing_stop_pct": self.trailing_stop_pct,
+            "max_hold_minutes": self.max_hold_minutes,
             "reference": self.reference,
         }
 
@@ -116,8 +120,11 @@ class Strategy(ABC):
     def _eval(self, inp: SignalInput, conds: list[Condition], strength: float) -> Evaluation:
         p: Any = self.params
         return Evaluation(
-            strategy=self.id, symbol=inp.ctx.symbol, passed=all(c.passed for c in conds),
-            strength=max(0.0, min(1.0, strength)), conditions=conds,
+            strategy=self.id,
+            symbol=inp.ctx.symbol,
+            passed=all(c.passed for c in conds),
+            strength=max(0.0, min(1.0, strength)),
+            conditions=conds,
             stop_loss_pct=getattr(p, "stop_loss_pct", None),
             take_profit_pct=getattr(p, "take_profit_pct", None),
             trailing_stop_pct=getattr(p, "trailing_stop_pct", None),
@@ -126,8 +133,12 @@ class Strategy(ABC):
 
     def describe(self) -> dict[str, Any]:
         return {
-            "id": self.id, "name": self.name, "summary": self.summary,
-            "entry_rules": self.entry_rules, "exit_rules": self.exit_rules, "risk_rules": self.risk_rules,
+            "id": self.id,
+            "name": self.name,
+            "summary": self.summary,
+            "entry_rules": self.entry_rules,
+            "exit_rules": self.exit_rules,
+            "risk_rules": self.risk_rules,
             "params_schema": self.ParamsModel.model_json_schema()["properties"],
             "params": self.params.model_dump(),
             "disclaimer": "Illustrative rules. Not a guarantee of profit; past/simulated results do not predict future results.",

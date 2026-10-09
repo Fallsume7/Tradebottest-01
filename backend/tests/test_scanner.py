@@ -1,13 +1,13 @@
 import numpy as np
 import pytest
 
-from mwbot.config import ScannerConfig, ScannerFilters, scanner_config_for_preset
+from mwbot.config import ScannerConfig, scanner_config_for_preset
 from mwbot.data.synthetic import SyntheticProvider, synthetic_regimes
 from mwbot.domain import StockMeta
 from mwbot.scanner.metrics import compute_metrics
 from mwbot.scanner.scanner import Scanner
 
-from .conftest import TEST_DAY, ONE, at, build_day, make_source, meta, relaxed_settings
+from .conftest import ONE, TEST_DAY, at, build_day, make_source, meta, relaxed_settings
 from .scenarios import fader, strong_runner
 
 
@@ -30,7 +30,9 @@ def test_metrics_match_hand_calculation(session_info):
     last = vis["close"].iloc[-1]
     assert m.price == pytest.approx(last)
     assert m.pct_change == pytest.approx((last / 10.0 - 1) * 100)
-    assert m.premarket_pct == pytest.approx((vis[vis.index < session_info.open_utc]["close"].iloc[-1] / 10 - 1) * 100)
+    assert m.premarket_pct == pytest.approx(
+        (vis[vis.index < session_info.open_utc]["close"].iloc[-1] / 10 - 1) * 100
+    )
     assert m.gap_pct == pytest.approx((reg["open"].iloc[0] / 10 - 1) * 100)
     tp = (reg["high"] + reg["low"] + reg["close"]) / 3
     assert m.vwap == pytest.approx(float((tp * reg["volume"]).sum() / reg["volume"].sum()))
@@ -57,7 +59,12 @@ def test_rvol_unavailable_without_adv_and_policy(session_info):
 
 
 def test_missing_prev_close_means_no_pct_change_not_zero(session_info):
-    ctx = ctx_at(session_info, strong_runner(session_info), 15, StockMeta("TST", "x", prev_close=None, avg_daily_volume=1e6))
+    ctx = ctx_at(
+        session_info,
+        strong_runner(session_info),
+        15,
+        StockMeta("TST", "x", prev_close=None, avg_daily_volume=1e6),
+    )
     m = compute_metrics(ctx)
     assert m.pct_change is None and m.premarket_pct is None and m.gap_pct is None
 
@@ -101,7 +108,9 @@ def test_each_filter_blocks_with_a_reason(session_info, filters, needle):
 
 def test_halted_symbol_is_blocked(session_info):
     bars = strong_runner(session_info)
-    src = make_source(session_info, {"TST": (meta(), bars)}, halts={"TST": [(at(session_info, 10), at(session_info, 20))]})
+    src = make_source(
+        session_info, {"TST": (meta(), bars)}, halts={"TST": [(at(session_info, 10), at(session_info, 20))]}
+    )
     r = scanner().scan_one(src.context_for("TST", at(session_info, 15)))
     assert not r.tradable and "trading halted" in r.blockers
     assert scanner(exclude_halted=False).scan_one(src.context_for("TST", at(session_info, 15))).tradable
@@ -124,10 +133,13 @@ def test_abnormal_prints_are_flagged(session_info):
 
 def test_biggest_gainer_is_not_automatically_top_ranked(session_info):
     """+60% premarket gapper that is fading must rank below a smaller, steadier, still-rising mover."""
-    src = make_source(session_info, {
-        "FADE": (meta("FADE"), fader(session_info)),
-        "RUN": (meta("RUN"), strong_runner(session_info)),
-    })
+    src = make_source(
+        session_info,
+        {
+            "FADE": (meta("FADE"), fader(session_info)),
+            "RUN": (meta("RUN"), strong_runner(session_info)),
+        },
+    )
     s = scanner(max_price=50.0, min_pct_change=3.0)
     res = {r.symbol: r for r in s.scan(src.contexts_at(at(session_info, 40)))}
     fade, run = res["FADE"], res["RUN"]
@@ -147,7 +159,10 @@ def test_presets_define_expected_price_bands():
 
 
 def test_scan_orders_tradable_first_with_ranks(session_info):
-    src = make_source(session_info, {"FADE": (meta("FADE"), fader(session_info)), "RUN": (meta("RUN"), strong_runner(session_info))})
+    src = make_source(
+        session_info,
+        {"FADE": (meta("FADE"), fader(session_info)), "RUN": (meta("RUN"), strong_runner(session_info))},
+    )
     res = scanner().scan(src.contexts_at(at(session_info, 40)))
     ranks = [r.rank for r in res if r.tradable]
     assert ranks == sorted(ranks) and ranks[0] == 1

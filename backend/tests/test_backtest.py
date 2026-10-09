@@ -31,7 +31,24 @@ from .scenarios import runner_day
 # ------------------------------------------------------------------ metrics maths
 def _trade(pnl, ret=1.0, strat="s", day="2026-09-14", hold=10.0):
     t0 = at(session_for(TEST_DAY), 10)
-    return Trade("T", "X", strat, 100, t0, 10.0, t0 + timedelta(minutes=hold), 10.0 + pnl / 100, pnl, 0.0, pnl, ret, hold, "", "", day)
+    return Trade(
+        "T",
+        "X",
+        strat,
+        100,
+        t0,
+        10.0,
+        t0 + timedelta(minutes=hold),
+        10.0 + pnl / 100,
+        pnl,
+        0.0,
+        pnl,
+        ret,
+        hold,
+        "",
+        "",
+        day,
+    )
 
 
 def test_max_drawdown_known_series():
@@ -88,13 +105,23 @@ def test_backtest_is_reproducible(sample_provider, three_days, base_result):
 
 
 def test_changing_config_changes_hash(sample_provider, three_days, base_result):
-    other = run_backtest(sample_provider, cfg(dates=three_days, oos_fraction=0.34, costs=CostConfig(slippage_bps=25)))
+    other = run_backtest(
+        sample_provider, cfg(dates=three_days, oos_fraction=0.34, costs=CostConfig(slippage_bps=25))
+    )
     assert other.result_hash != base_result.result_hash
 
 
 def test_higher_costs_reduce_profit(sample_provider, three_days):
-    cheap = run_backtest(sample_provider, cfg(dates=three_days, costs=CostConfig(slippage_bps=1, assumed_spread_bps=5)))
-    dear = run_backtest(sample_provider, cfg(dates=three_days, costs=CostConfig(slippage_bps=60, assumed_spread_bps=120, commission_per_share=0.01)))
+    cheap = run_backtest(
+        sample_provider, cfg(dates=three_days, costs=CostConfig(slippage_bps=1, assumed_spread_bps=5))
+    )
+    dear = run_backtest(
+        sample_provider,
+        cfg(
+            dates=three_days,
+            costs=CostConfig(slippage_bps=60, assumed_spread_bps=120, commission_per_share=0.01),
+        ),
+    )
     assert cheap.summary["n_trades"] > 0
     assert dear.summary["net_pnl"] < cheap.summary["net_pnl"]
 
@@ -141,13 +168,21 @@ def test_csv_exports(base_result):
     assert rows and len(rows) == len(base_result.trades)
     assert {"symbol", "strategy", "entry_price", "exit_price", "net_pnl", "exit_reason"} <= set(rows[0])
     summary = summary_to_csv(base_result)
-    assert summary.startswith("metric,value") and "total_return_pct" in summary and "benchmark_return_pct" in summary
+    assert (
+        summary.startswith("metric,value")
+        and "total_return_pct" in summary
+        and "benchmark_return_pct" in summary
+    )
 
 
 def test_compare_strategies_runs_each_plus_combined(sample_provider, three_days):
     res = compare_strategies(sample_provider, cfg(dates=three_days), ["opening_momentum", "gap_continuation"])
     assert len(res) == 3
-    assert {tuple(r.config["strategies"]) for r in res} == {("opening_momentum",), ("gap_continuation",), ("opening_momentum", "gap_continuation")}
+    assert {tuple(r.config["strategies"]) for r in res} == {
+        ("opening_momentum",),
+        ("gap_continuation",),
+        ("opening_momentum", "gap_continuation"),
+    }
     assert len({r.id for r in res}) == 3
 
 
@@ -176,8 +211,24 @@ def test_unresolved_positions_are_force_closed_and_flagged():
     sess = session_for(TEST_DAY)
     sched = build_schedule(TEST_DAY, ScheduleConfig())
     halt = [(sched.liquidation_start - timedelta(minutes=2), sess.close_utc + timedelta(hours=1))]
-    src = make_source(sess, {"TST": (meta(), runner_day(sess, [(20, 11.7, 28_000), (30, 11.85, 14_000)]))}, halts={"TST": halt})
-    res = run_backtest(OneDayProvider(src), cfg(strategy_params={"opening_momentum": {"take_profit_pct": None, "trailing_stop_pct": None, "max_hold_minutes": None, "stop_loss_pct": 20.0}}))
+    src = make_source(
+        sess,
+        {"TST": (meta(), runner_day(sess, [(20, 11.7, 28_000), (30, 11.85, 14_000)]))},
+        halts={"TST": halt},
+    )
+    res = run_backtest(
+        OneDayProvider(src),
+        cfg(
+            strategy_params={
+                "opening_momentum": {
+                    "take_profit_pct": None,
+                    "trailing_stop_pct": None,
+                    "max_hold_minutes": None,
+                    "stop_loss_pct": 20.0,
+                }
+            }
+        ),
+    )
     assert res.days[0].unresolved == ["TST"]
     assert res.summary["days_with_unresolved_positions"] == 1
     assert any("force-closed" in w for w in res.warnings)

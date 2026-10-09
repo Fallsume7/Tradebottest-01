@@ -11,11 +11,12 @@ import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
-from datetime import UTC, date, datetime, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
+import pandas as pd
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 
@@ -32,7 +33,6 @@ from mwbot.bot.report import report_markdown
 from mwbot.bot.runner import SessionRunner
 from mwbot.calendar import (
     CHICAGO,
-    Phase,
     build_schedule,
     is_trading_day,
     next_trading_day,
@@ -53,7 +53,6 @@ from mwbot.db.store import SqlStore, make_engine
 from mwbot.domain import FeedInfo, FeedKind, OrderRequest, OrderType, Side, TimeInForce, utcnow
 from mwbot.execution.base import ExecutionAdapter
 from mwbot.logging_setup import ring_buffer
-from mwbot.scanner.metrics import compute_metrics
 from mwbot.scanner.scanner import Scanner
 from mwbot.strategies.base import SignalInput
 from mwbot.strategies.builtin import STRATEGY_CLASSES, build_strategy
@@ -124,7 +123,9 @@ class AppService:
                 self.provider = CsvHistoricalProvider(path)
             else:
                 self.provider = MassiveProvider(
-                    self.env.massive_api_key, self.env.massive_base_url, feed=self.env.massive_feed,
+                    self.env.massive_api_key,
+                    self.env.massive_base_url,
+                    feed=self.env.massive_feed,
                     delay_seconds=self.env.massive_delay_seconds,
                 )
         except (DataUnavailableError, DatasetError, FileNotFoundError, OSError) as exc:
@@ -135,6 +136,7 @@ class AppService:
     def _build_mirror(self) -> None:
         if self.env.execution_mode == "mock_browser":
             from mwbot.execution.factory import create_adapter
+
             try:
                 self.mirror = create_adapter(self.env)
                 self.bot.mirror = self.mirror
@@ -147,9 +149,11 @@ class AppService:
     def _recover_after_restart(self) -> None:
         """A restart cannot resume an in-memory replay. Never pretend: flag open exposure loudly."""
         if self.broker.positions or self.broker.open_orders():
-            msg = (f"Restarted with {len(self.broker.positions)} open position(s) and "
-                   f"{len(self.broker.open_orders())} pending order(s) restored from the database. "
-                   "Start a session to resume management, or flatten via Positions.")
+            msg = (
+                f"Restarted with {len(self.broker.positions)} open position(s) and "
+                f"{len(self.broker.open_orders())} pending order(s) restored from the database. "
+                "Start a session to resume management, or flatten via Positions."
+            )
             self.bot._alert("warning", "restart_recovery", msg, utcnow())
             log.warning(msg)
 
@@ -173,7 +177,11 @@ class AppService:
                     build_strategy(sid, new.strategies.params.get(sid))
             except Exception as exc:
                 raise ServiceError(f"Invalid settings: {exc}") from exc
-            mode_changed = new.data_mode != self.settings.data_mode or new.demo_seed != self.settings.demo_seed or new.historical_dataset != self.settings.historical_dataset
+            mode_changed = (
+                new.data_mode != self.settings.data_mode
+                or new.demo_seed != self.settings.demo_seed
+                or new.historical_dataset != self.settings.historical_dataset
+            )
             capital_changed = new.risk.starting_capital != self.settings.risk.starting_capital
             self.settings = new
             self.bot.apply_settings(new)
@@ -204,7 +212,9 @@ class AppService:
             done = {r["date"] for r in self.store.reports()}
             remaining = [d for d in dates if d.isoformat() not in done]
             if not remaining:
-                raise ServiceError("All dates in this dataset have been replayed. Reset the account to replay again.")
+                raise ServiceError(
+                    "All dates in this dataset have been replayed. Reset the account to replay again."
+                )
             return remaining[0]
         if mode == "connected":
             today = utcnow().astimezone(ET).date()
@@ -216,7 +226,9 @@ class AppService:
             return next_trading_day(date.fromisoformat(last))
         return previous_trading_day(utcnow().astimezone(ET).date() + timedelta(days=0))
 
-    def start_session(self, d: date | None = None, speed: float | None = None, instant: bool = False) -> dict[str, Any]:
+    def start_session(
+        self, d: date | None = None, speed: float | None = None, instant: bool = False
+    ) -> dict[str, Any]:
         with self.lock:
             if self.session_status == "running":
                 raise ServiceError("A session is already running.")
@@ -322,7 +334,11 @@ class AppService:
             self.session_status = "running"
             self._stop.clear()
             self._thread = threading.Thread(
-                target=self._loop, args=(1.0 / max(speed or self.settings.demo_speed, 0.01),), name="session", daemon=True)
+                target=self._loop,
+                args=(1.0 / max(speed or self.settings.demo_speed, 0.01),),
+                name="session",
+                daemon=True,
+            )
             self._thread.start()
 
     def stop_session(self) -> None:
@@ -366,7 +382,9 @@ class AppService:
             self.stop_session()
             self.store.reset_account()
             self.store.set_kv("last_demo_date", None)
-            self.broker = PaperBroker(self.settings.risk.starting_capital, self.settings.costs, store=self.store)
+            self.broker = PaperBroker(
+                self.settings.risk.starting_capital, self.settings.costs, store=self.store
+            )
             self.bot = TradingBot(self.settings, self.broker, mirror=self.mirror)
             self.bot.on_decision = self.store.add_decision
             self.runner = None
@@ -388,8 +406,13 @@ class AppService:
             return
         job = self.scheduler.get_job("live_tick")
         if self.settings.auto_schedule and job is None:
-            self.scheduler.add_job(self._live_tick, IntervalTrigger(seconds=self.settings.schedule.tick_seconds),
-                                   id="live_tick", max_instances=1, coalesce=True)
+            self.scheduler.add_job(
+                self._live_tick,
+                IntervalTrigger(seconds=self.settings.schedule.tick_seconds),
+                id="live_tick",
+                max_instances=1,
+                coalesce=True,
+            )
             log.info("live-clock scheduler enabled")
         elif not self.settings.auto_schedule and job is not None:
             self.scheduler.remove_job("live_tick")
@@ -436,7 +459,9 @@ class AppService:
 
     def feed(self) -> dict[str, Any]:
         if self.provider is None:
-            return FeedInfo(FeedKind.HISTORICAL, "none", "NO DATA FEED", warnings=[self.provider_error]).to_dict() | {"available": False}
+            return FeedInfo(
+                FeedKind.HISTORICAL, "none", "NO DATA FEED", warnings=[self.provider_error]
+            ).to_dict() | {"available": False}
         return self.provider.feed_info().to_dict() | {"available": True}
 
     def status(self) -> dict[str, Any]:
@@ -449,8 +474,9 @@ class AppService:
                 "bot_state": str(self.bot.state),
                 "session_status": self.session_status,
                 "session_error": self.session_error,
-                "phase": str(self.bot.phase) if self.runner and not self.runner.finished else (
-                    "post_close" if self.runner and self.runner.finished else "idle"),
+                "phase": str(self.bot.phase)
+                if self.runner and not self.runner.finished
+                else ("post_close" if self.runner and self.runner.finished else "idle"),
                 "session_date": sched.session.date if sched else None,
                 "sim_time_utc": now.isoformat() if now else None,
                 "sim_time_chicago": to_chicago(now).strftime("%Y-%m-%d %H:%M") if now else None,
@@ -462,10 +488,13 @@ class AppService:
                 "feed": self.feed(),
                 "provider_error": self.provider_error,
                 "portfolio": {
-                    "equity": round(b.equity(), 2), "cash": round(b.cash, 2),
+                    "equity": round(b.equity(), 2),
+                    "cash": round(b.cash, 2),
                     "buying_power": round(b.buying_power(), 2),
                     "starting_capital": b.starting_cash,
-                    "total_return_pct": round((b.equity() / b.starting_cash - 1) * 100, 4) if b.starting_cash else 0.0,
+                    "total_return_pct": round((b.equity() / b.starting_cash - 1) * 100, 4)
+                    if b.starting_cash
+                    else 0.0,
                     "daily_pnl": round(b.equity() - start_eq, 2),
                     "daily_pnl_pct": round((b.equity() / start_eq - 1) * 100, 4) if start_eq else 0.0,
                     "realized_pnl": round(b.realized_pnl, 2),
@@ -484,30 +513,56 @@ class AppService:
             out = []
             for p in self.broker.positions.values():
                 mark = self.broker.marks.get(p.symbol, p.avg_cost)
-                pending = [o.id for o in self.broker.open_orders() if o.symbol == p.symbol and o.side == Side.SELL]
-                out.append({
-                    "symbol": p.symbol, "quantity": p.quantity, "avg_cost": round(p.avg_cost, 4), "mark": round(mark, 4),
-                    "market_value": round(p.quantity * mark, 2), "unrealized_pnl": round(p.unrealized(mark), 2),
-                    "unrealized_pct": round((mark / p.avg_cost - 1) * 100, 3) if p.avg_cost else 0,
-                    "strategy": p.strategy, "opened_at": p.opened_at.isoformat(), "entry_reason": p.entry_reason,
-                    "stop_price": p.stop_price, "take_profit_price": p.take_profit_price,
-                    "trailing_stop_pct": p.trailing_stop_pct, "high_water_mark": round(p.high_water_mark, 4),
-                    "max_hold_minutes": p.max_hold_minutes, "exit_order_ids": pending,
-                })
+                pending = [
+                    o.id for o in self.broker.open_orders() if o.symbol == p.symbol and o.side == Side.SELL
+                ]
+                out.append(
+                    {
+                        "symbol": p.symbol,
+                        "quantity": p.quantity,
+                        "avg_cost": round(p.avg_cost, 4),
+                        "mark": round(mark, 4),
+                        "market_value": round(p.quantity * mark, 2),
+                        "unrealized_pnl": round(p.unrealized(mark), 2),
+                        "unrealized_pct": round((mark / p.avg_cost - 1) * 100, 3) if p.avg_cost else 0,
+                        "strategy": p.strategy,
+                        "opened_at": p.opened_at.isoformat(),
+                        "entry_reason": p.entry_reason,
+                        "stop_price": p.stop_price,
+                        "take_profit_price": p.take_profit_price,
+                        "trailing_stop_pct": p.trailing_stop_pct,
+                        "high_water_mark": round(p.high_water_mark, 4),
+                        "max_hold_minutes": p.max_hold_minutes,
+                        "exit_order_ids": pending,
+                    }
+                )
             return out
 
     def orders(self, limit: int = 200) -> list[dict[str, Any]]:
         with self.lock:
             rows = sorted(self.broker.orders.values(), key=lambda o: o.id, reverse=True)[:limit]
-            return [{
-                "id": o.id, "client_order_id": o.client_order_id, "symbol": o.symbol, "side": str(o.side),
-                "quantity": o.quantity, "filled_quantity": o.filled_quantity, "order_type": str(o.order_type),
-                "limit_price": o.limit_price, "status": str(o.status), "avg_fill_price": round(o.avg_fill_price, 4),
-                "strategy": o.strategy, "reason": o.reason, "reject_reason": o.reject_reason,
-                "created_at": o.created_at.isoformat(), "updated_at": o.updated_at.isoformat() if o.updated_at else None,
-                "external_id": o.meta.get("external_id"),
-                "history": [[t.isoformat(), s, n] for t, s, n in o.history],
-            } for o in rows]
+            return [
+                {
+                    "id": o.id,
+                    "client_order_id": o.client_order_id,
+                    "symbol": o.symbol,
+                    "side": str(o.side),
+                    "quantity": o.quantity,
+                    "filled_quantity": o.filled_quantity,
+                    "order_type": str(o.order_type),
+                    "limit_price": o.limit_price,
+                    "status": str(o.status),
+                    "avg_fill_price": round(o.avg_fill_price, 4),
+                    "strategy": o.strategy,
+                    "reason": o.reason,
+                    "reject_reason": o.reject_reason,
+                    "created_at": o.created_at.isoformat(),
+                    "updated_at": o.updated_at.isoformat() if o.updated_at else None,
+                    "external_id": o.meta.get("external_id"),
+                    "history": [[t.isoformat(), s, n] for t, s, n in o.history],
+                }
+                for o in rows
+            ]
 
     def trades(self) -> list[dict[str, Any]]:
         with self.lock:
@@ -537,33 +592,64 @@ class AppService:
             scan = scanner.scan_one(ctx)
             mins = (now - self.runner.schedule.open).total_seconds() / 60
             inp = SignalInput(ctx, scan.metrics, scan, mins)
-            evs = [build_strategy(sid, self.settings.strategies.params.get(sid)).evaluate_entry(inp).to_dict()
-                   for sid in STRATEGY_CLASSES]
+            evs = [
+                build_strategy(sid, self.settings.strategies.params.get(sid)).evaluate_entry(inp).to_dict()
+                for sid in STRATEGY_CLASSES
+            ]
             bars = ctx.bars.tail(600)
             pos = self.broker.positions.get(symbol)
             return {
-                "symbol": symbol, "name": ctx.meta.name, "as_of": now.isoformat(), "feed": self.feed(),
-                "bars": [{"t": int(ts.timestamp()), "o": float(r.open), "h": float(r.high), "l": float(r.low),
-                          "c": float(r.close), "v": float(r.volume)} for ts, r in bars.iterrows()],
+                "symbol": symbol,
+                "name": ctx.meta.name,
+                "as_of": now.isoformat(),
+                "feed": self.feed(),
+                "bars": [
+                    {
+                        "t": int(pd.Timestamp(str(ts)).timestamp()),
+                        "o": float(r.open),
+                        "h": float(r.high),
+                        "l": float(r.low),
+                        "c": float(r.close),
+                        "v": float(r.volume),
+                    }
+                    for ts, r in bars.iterrows()
+                ],
                 "open_time": int(self.runner.schedule.open.timestamp()),
-                "scan": scan.to_dict(), "evaluations": evs, "halted": ctx.halted,
+                "scan": scan.to_dict(),
+                "evaluations": evs,
+                "halted": ctx.halted,
                 "position": next((p for p in self.positions() if p["symbol"] == symbol), None),
                 "held": pos is not None,
             }
 
-    def manual_order(self, symbol: str, side: str, quantity: int, order_type: str = "market",
-                     limit_price: float | None = None, client_order_id: str | None = None) -> dict[str, Any]:
+    def manual_order(
+        self,
+        symbol: str,
+        side: str,
+        quantity: int,
+        order_type: str = "market",
+        limit_price: float | None = None,
+        client_order_id: str | None = None,
+    ) -> dict[str, Any]:
         with self.lock:
             if self.runner is None or self.runner.finished:
                 raise ServiceError("Manual simulated orders need an active session.")
             if self.bot.state == BotState.EMERGENCY_STOP:
                 raise ServiceError("Emergency stop is active.")
             req = OrderRequest(
-                client_order_id=client_order_id or f"manual-{uuid.uuid4().hex[:12]}", symbol=symbol.upper(),
-                side=Side(side), quantity=int(quantity), order_type=OrderType(order_type), limit_price=limit_price,
-                time_in_force=TimeInForce.DAY, strategy="manual", reason="Manual simulated order from dashboard",
-                meta={"stop_loss_pct": self.settings.risk.stop_loss_pct,
-                      "take_profit_pct": self.settings.risk.take_profit_pct},
+                client_order_id=client_order_id or f"manual-{uuid.uuid4().hex[:12]}",
+                symbol=symbol.upper(),
+                side=Side(side),
+                quantity=int(quantity),
+                order_type=OrderType(order_type),
+                limit_price=limit_price,
+                time_in_force=TimeInForce.DAY,
+                strategy="manual",
+                reason="Manual simulated order from dashboard",
+                meta={
+                    "stop_loss_pct": self.settings.risk.stop_loss_pct,
+                    "take_profit_pct": self.settings.risk.take_profit_pct,
+                },
             )
             o = self.broker.submit(req, self.runner.now, expires_at=self.runner.schedule.close)
             return {"id": o.id, "status": str(o.status), "reject_reason": o.reject_reason}
@@ -597,18 +683,36 @@ class AppService:
             start = self.broker.starting_cash
             eq = [start] + [r["end_equity"] for r in reports]
             daily = [r["pnl_pct"] for r in reports]
-            bench = [r.get("benchmark_return_pct") for r in reports if r.get("benchmark_return_pct") is not None]
+            bench = [
+                float(r["benchmark_return_pct"]) for r in reports if r.get("benchmark_return_pct") is not None
+            ]
             dd, dd_abs = max_drawdown(eq)
-            by = {sid: trade_stats([t for t in trades if t.strategy == sid]) for sid in sorted({t.strategy for t in trades})}
+            by = {
+                sid: trade_stats([t for t in trades if t.strategy == sid])
+                for sid in sorted({t.strategy for t in trades})
+            }
             return {
-                "starting_capital": start, "equity": round(self.broker.equity(), 2),
+                "starting_capital": start,
+                "equity": round(self.broker.equity(), 2),
                 "total_return_pct": round((self.broker.equity() / start - 1) * 100, 4) if start else 0.0,
                 "benchmark_return_pct": round(compound(bench), 4) if bench else None,
                 "benchmark_note": "Equal-weight average open-to-close return of the simulated universe (not an index).",
-                "max_drawdown_pct": round(dd * 100, 3), "max_drawdown_usd": round(dd_abs, 2),
-                "daily": [{"date": r["date"], "pnl": r["pnl"], "pnl_pct": r["pnl_pct"], "n_trades": r["n_trades"],
-                           "end_equity": r["end_equity"], "benchmark_pct": r.get("benchmark_return_pct")} for r in reports],
-                "trade_stats": trade_stats(trades), "daily_stats": daily_ratio_stats(daily), "by_strategy": by,
+                "max_drawdown_pct": round(dd * 100, 3),
+                "max_drawdown_usd": round(dd_abs, 2),
+                "daily": [
+                    {
+                        "date": r["date"],
+                        "pnl": r["pnl"],
+                        "pnl_pct": r["pnl_pct"],
+                        "n_trades": r["n_trades"],
+                        "end_equity": r["end_equity"],
+                        "benchmark_pct": r.get("benchmark_return_pct"),
+                    }
+                    for r in reports
+                ],
+                "trade_stats": trade_stats(trades),
+                "daily_stats": daily_ratio_stats(daily),
+                "by_strategy": by,
             }
 
     def logs(self) -> list[dict[str, Any]]:
@@ -622,9 +726,17 @@ class AppService:
             for p in sorted(root.iterdir()):
                 if (p / "manifest.json").exists():
                     import json
+
                     m = json.loads((p / "manifest.json").read_text(encoding="utf-8"))
-                    out.append({"id": p.name, "name": m.get("name", p.name), "synthetic": bool(m.get("synthetic")),
-                                "dates": m.get("dates"), "description": m.get("description", "")})
+                    out.append(
+                        {
+                            "id": p.name,
+                            "name": m.get("name", p.name),
+                            "synthetic": bool(m.get("synthetic")),
+                            "dates": m.get("dates"),
+                            "description": m.get("description", ""),
+                        }
+                    )
         return out
 
     def _provider_for_backtest(self, dataset: str | None) -> MarketDataProvider:
@@ -635,7 +747,9 @@ class AppService:
         except (DatasetError, FileNotFoundError, OSError) as exc:
             raise ServiceError(f"dataset {dataset!r} unavailable: {exc}") from exc
 
-    def start_backtest(self, config: BacktestConfig, dataset: str | None, compare: list[str] | None = None) -> str:
+    def start_backtest(
+        self, config: BacktestConfig, dataset: str | None, compare: list[str] | None = None
+    ) -> str:
         provider = self._provider_for_backtest(dataset)
         for sid in config.strategies + (compare or []):
             if sid not in STRATEGY_CLASSES:
@@ -653,17 +767,24 @@ class AppService:
         def work() -> None:
             job.status = "running"
             try:
+
                 def prog(i: int, n: int, label: str) -> None:
                     job.progress = i / max(n, 1)
                     job.message = label
+
                 if compare:
                     results = compare_strategies(provider, config, compare, progress=prog)
                 else:
                     results = [run_backtest(provider, config, progress=prog, cancel=lambda: job.cancel)]
                 for r in results:
                     self._bt_cache[r.id] = r
-                    self.store.save_backtest(r.id, r.config.get("name", "backtest"), r.config, r.summary,
-                                             r.to_dict(include_trades=True))
+                    self.store.save_backtest(
+                        r.id,
+                        r.config.get("name", "backtest"),
+                        r.config,
+                        r.summary,
+                        r.to_dict(include_trades=True),
+                    )
                     job.result_ids.append(r.id)
                 job.status = "cancelled" if job.cancel else "done"
                 job.progress = 1.0
@@ -679,11 +800,18 @@ class AppService:
         j = self.jobs.get(job_id)
         if j is None:
             raise ServiceError("unknown job")
-        return {"id": j.id, "status": j.status, "progress": j.progress, "message": j.message,
-                "result_ids": j.result_ids, "error": j.error}
+        return {
+            "id": j.id,
+            "status": j.status,
+            "progress": j.progress,
+            "message": j.message,
+            "result_ids": j.result_ids,
+            "error": j.error,
+        }
 
     def backtest_csv(self, bt_id: str, kind: str) -> str:
         from mwbot.backtest.engine import summary_to_csv, trades_to_csv
+
         r = self._bt_cache.get(bt_id)
         if r is None:
             raise ServiceError("backtest not in memory; re-run it (CSV export uses the in-memory result)")
@@ -698,5 +826,3 @@ def _deep_merge(base: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any]:
         else:
             out[k] = v
     return out
-
-

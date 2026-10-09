@@ -36,9 +36,20 @@ def profit_factor(pnls: Sequence[float]) -> float | None:
 def trade_stats(trades: Sequence[Trade]) -> dict[str, Any]:
     n = len(trades)
     if n == 0:
-        return {"n_trades": 0, "win_rate": None, "net_pnl": 0.0, "avg_win": None, "avg_loss": None,
-                "payoff_ratio": None, "profit_factor": None, "expectancy": None, "avg_return_pct": None,
-                "avg_hold_minutes": None, "best_trade": None, "worst_trade": None}
+        return {
+            "n_trades": 0,
+            "win_rate": None,
+            "net_pnl": 0.0,
+            "avg_win": None,
+            "avg_loss": None,
+            "payoff_ratio": None,
+            "profit_factor": None,
+            "expectancy": None,
+            "avg_return_pct": None,
+            "avg_hold_minutes": None,
+            "best_trade": None,
+            "worst_trade": None,
+        }
     pnls = [t.net_pnl for t in trades]
     wins = [p for p in pnls if p > 0]
     losses = [p for p in pnls if p <= 0]
@@ -63,8 +74,14 @@ def trade_stats(trades: Sequence[Trade]) -> dict[str, Any]:
 
 def daily_ratio_stats(daily_returns_pct: Sequence[float]) -> dict[str, Any]:
     n = len(daily_returns_pct)
-    out: dict[str, Any] = {"n_days": n, "mean_daily_pct": None, "std_daily_pct": None, "sharpe": None,
-                           "sortino": None, "ratios_note": None}
+    out: dict[str, Any] = {
+        "n_days": n,
+        "mean_daily_pct": None,
+        "std_daily_pct": None,
+        "sharpe": None,
+        "sortino": None,
+        "ratios_note": None,
+    }
     if n == 0:
         return out
     r = np.asarray(daily_returns_pct, dtype=float) / 100
@@ -72,8 +89,10 @@ def daily_ratio_stats(daily_returns_pct: Sequence[float]) -> dict[str, Any]:
     out["best_day_pct"] = float(r.max() * 100)
     out["worst_day_pct"] = float(r.min() * 100)
     if n < MIN_DAYS_FOR_RATIOS:
-        out["ratios_note"] = (f"Only {n} trading days: Sharpe/Sortino are not statistically meaningful "
-                              f"(need >= {MIN_DAYS_FOR_RATIOS}) and are withheld.")
+        out["ratios_note"] = (
+            f"Only {n} trading days: Sharpe/Sortino are not statistically meaningful "
+            f"(need >= {MIN_DAYS_FOR_RATIOS}) and are withheld."
+        )
         out["std_daily_pct"] = float(r.std(ddof=1) * 100) if n > 1 else None
         return out
     sd = r.std(ddof=1)

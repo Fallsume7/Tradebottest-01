@@ -32,8 +32,10 @@ from mwbot.execution.base import (
 log = logging.getLogger(__name__)
 
 _STATUS = {
-    "pending": OrderStatus.PENDING, "filled": OrderStatus.FILLED,
-    "canceled": OrderStatus.CANCELED, "rejected": OrderStatus.REJECTED,
+    "pending": OrderStatus.PENDING,
+    "filled": OrderStatus.FILLED,
+    "canceled": OrderStatus.CANCELED,
+    "rejected": OrderStatus.REJECTED,
 }
 LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1"}
 
@@ -63,12 +65,21 @@ class MockBrowserAdapter(ExecutionAdapter):
     is_real_money: ClassVar[bool] = False
 
     def __init__(
-        self, base_url: str, username: str, password: str, *, headless: bool = True,
-        timeout_ms: int = 5000, executable_path: str | None = None, slow_mo_ms: int = 0,
+        self,
+        base_url: str,
+        username: str,
+        password: str,
+        *,
+        headless: bool = True,
+        timeout_ms: int = 5000,
+        executable_path: str | None = None,
+        slow_mo_ms: int = 0,
     ) -> None:
         host = urlparse(base_url).hostname or ""
         if host not in LOCAL_HOSTS:
-            raise ExecutionError(f"MockBrowserAdapter only talks to a local mock site, refusing host {host!r}")
+            raise ExecutionError(
+                f"MockBrowserAdapter only talks to a local mock site, refusing host {host!r}"
+            )
         self.base_url = base_url.rstrip("/")
         self.username, self.password = username, password
         self.timeout_ms = timeout_ms
@@ -89,10 +100,15 @@ class MockBrowserAdapter(ExecutionAdapter):
         try:
             from playwright.sync_api import sync_playwright
         except ImportError as exc:  # pragma: no cover
-            raise ExecutionError("Playwright is not installed: pip install -e 'backend[browser]' && playwright install chromium") from exc
+            raise ExecutionError(
+                "Playwright is not installed: pip install -e 'backend[browser]' && playwright install chromium"
+            ) from exc
         self._pw = sync_playwright().start()
-        kwargs: dict[str, Any] = {"headless": self._headless, "slow_mo": self._slow_mo,
-                                  "args": ["--no-sandbox"] if os.environ.get("CI") or os.geteuid() == 0 else []}
+        kwargs: dict[str, Any] = {
+            "headless": self._headless,
+            "slow_mo": self._slow_mo,
+            "args": ["--no-sandbox"] if os.environ.get("CI") or os.geteuid() == 0 else [],
+        }
         if self._exe:
             kwargs["executable_path"] = self._exe
         self._browser = self._pw.chromium.launch(**kwargs)
@@ -150,12 +166,16 @@ class MockBrowserAdapter(ExecutionAdapter):
     # ------------------------------------------------------------------ reads
     def get_buying_power(self) -> float:
         page = self._goto("/portfolio")
-        return _money(page.locator("#buying-power").get_attribute("data-value") or page.locator("#buying-power").inner_text())
+        return _money(
+            page.locator("#buying-power").get_attribute("data-value")
+            or page.locator("#buying-power").inner_text()
+        )
 
     def get_holdings(self) -> list[Holding]:
         page = self._goto("/portfolio")
         rows = page.eval_on_selector_all(
-            "tr.holding", "els => els.map(e => ({s: e.dataset.symbol, q: e.dataset.qty, a: e.dataset.avg}))")
+            "tr.holding", "els => els.map(e => ({s: e.dataset.symbol, q: e.dataset.qty, a: e.dataset.avg}))"
+        )
         return [Holding(r["s"], int(r["q"]), float(r["a"])) for r in rows]
 
     # ------------------------------------------------------------------ orders
@@ -221,9 +241,11 @@ class MockBrowserAdapter(ExecutionAdapter):
     def _read_orders(self) -> list[dict[str, str]]:
         page = self._goto("/orders")
         return page.eval_on_selector_all(
-            "tr.order", """els => els.map(e => ({id: e.dataset.orderId, status: e.dataset.status, symbol: e.dataset.symbol,
+            "tr.order",
+            """els => els.map(e => ({id: e.dataset.orderId, status: e.dataset.status, symbol: e.dataset.symbol,
               side: e.dataset.side, qty: e.dataset.qty, filled: e.dataset.filled, price: e.dataset.price,
-              note: e.children[6] ? e.children[6].innerText : ''}))""")
+              note: e.children[6] ? e.children[6].innerText : ''}))""",
+        )
 
     def _known_order_ids(self) -> set[str]:
         try:
@@ -235,7 +257,12 @@ class MockBrowserAdapter(ExecutionAdapter):
     def _new_order_since(self, before: set[str], req: OrderRequest) -> str | None:
         try:
             for o in self._read_orders():
-                if o["id"] not in before and o["symbol"] == req.symbol and int(o["qty"]) == req.quantity and o["side"] == req.side.value:
+                if (
+                    o["id"] not in before
+                    and o["symbol"] == req.symbol
+                    and int(o["qty"]) == req.quantity
+                    and o["side"] == req.side.value
+                ):
                     return o["id"]
         except ExecutionError:
             pass
@@ -246,8 +273,13 @@ class MockBrowserAdapter(ExecutionAdapter):
             if o["id"] == external_id:
                 cid = next((c for c, e in self._ledger.items() if e == external_id), "")
                 return ExternalOrder(
-                    external_id, cid, _STATUS.get(o["status"], OrderStatus.PENDING), int(o["filled"] or 0),
-                    float(o["price"]) if o["price"] else None, o["note"])
+                    external_id,
+                    cid,
+                    _STATUS.get(o["status"], OrderStatus.PENDING),
+                    int(o["filled"] or 0),
+                    float(o["price"]) if o["price"] else None,
+                    o["note"],
+                )
         raise ExecutionError(f"order {external_id} not found on venue")
 
     def cancel_order(self, external_id: str) -> bool:
@@ -259,7 +291,9 @@ class MockBrowserAdapter(ExecutionAdapter):
         page.wait_for_load_state()
         return self.get_order_status(external_id).status == OrderStatus.CANCELED
 
-    def wait_for_terminal(self, external_id: str, timeout_s: float = 10.0, poll_s: float = 0.25) -> ExternalOrder:
+    def wait_for_terminal(
+        self, external_id: str, timeout_s: float = 10.0, poll_s: float = 0.25
+    ) -> ExternalOrder:
         """Poll until the venue reports a final state (used in tests / delayed-execution handling)."""
         deadline = time.monotonic() + timeout_s
         while True:

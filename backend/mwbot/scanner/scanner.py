@@ -38,10 +38,13 @@ class Component:
 
     def to_dict(self) -> dict[str, Any]:
         return {
-            "name": self.name, "label": self.label,
+            "name": self.name,
+            "label": self.label,
             "raw": None if self.raw is None else round(self.raw, 4),
             "score": None if self.score is None else round(self.score, 3),
-            "weight": self.weight, "points": round(self.points, 2), "note": self.note,
+            "weight": self.weight,
+            "points": round(self.points, 2),
+            "note": self.note,
             "available": self.score is not None,
         }
 
@@ -65,11 +68,17 @@ class ScanResult:
 
     def to_dict(self) -> dict[str, Any]:
         return {
-            "symbol": self.symbol, "name": self.name, "rank": self.rank, "score": round(self.score, 1),
-            "tradable": self.tradable, "continuing": self.continuing,
+            "symbol": self.symbol,
+            "name": self.name,
+            "rank": self.rank,
+            "score": round(self.score, 1),
+            "tradable": self.tradable,
+            "continuing": self.continuing,
             "metrics": self.metrics.to_dict(),
             "components": [c.to_dict() for c in self.components],
-            "reasons": self.reasons, "warnings": self.warnings, "blockers": self.blockers,
+            "reasons": self.reasons,
+            "warnings": self.warnings,
+            "blockers": self.blockers,
         }
 
 
@@ -253,9 +262,15 @@ class Scanner:
         comps = self._components(m)
         reasons, warnings = self._reasons(m, comps)
         res = ScanResult(
-            symbol=ctx.symbol, name=ctx.meta.name or ctx.symbol, metrics=m,
-            score=sum(c.points for c in comps), components=comps, reasons=reasons,
-            warnings=warnings + notes, blockers=blockers, continuing=self._continuing(m),
+            symbol=ctx.symbol,
+            name=ctx.meta.name or ctx.symbol,
+            metrics=m,
+            score=sum(c.points for c in comps),
+            components=comps,
+            reasons=reasons,
+            warnings=warnings + notes,
+            blockers=blockers,
+            continuing=self._continuing(m),
         )
         return res
 

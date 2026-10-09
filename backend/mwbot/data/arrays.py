@@ -12,6 +12,11 @@ import numpy as np
 import pandas as pd
 
 
+def index_ns(idx: pd.Index) -> np.ndarray:
+    """Nanosecond epoch ints for a datetime index (pandas 3 may store us/ms units; normalise)."""
+    return np.asarray(pd.DatetimeIndex(idx).as_unit("ns").asi8).copy()  # type: ignore[attr-defined]
+
+
 @dataclass(slots=True)
 class BarArrays:
     ts: np.ndarray  # int64 ns
@@ -33,7 +38,13 @@ class BarArrays:
         v = df["volume"].to_numpy(dtype=float)
         tp = (h + low + c) / 3.0
         return cls(
-            ts=df.index.as_unit("ns").asi8.copy(), o=o, h=h, low=low, c=c, v=v,
-            cum_v=np.cumsum(v), cum_dv=np.cumsum(tp * v),
+            ts=index_ns(df.index),
+            o=o,
+            h=h,
+            low=low,
+            c=c,
+            v=v,
+            cum_v=np.cumsum(v),
+            cum_dv=np.cumsum(tp * v),
             run_high=np.maximum.accumulate(h) if len(h) else h,
         )

@@ -7,7 +7,7 @@ import pytest
 
 from mwbot.data.base import DataUnavailableError
 from mwbot.data.http import AuthError, ProviderHTTPError, RateLimiter, backoff_delays, request_json
-from mwbot.data.massive import MassiveClient, MassiveProvider, parse_aggregates
+from mwbot.data.massive import MassiveProvider, parse_aggregates
 from mwbot.domain import FeedKind
 
 from .conftest import TEST_DAY
@@ -16,17 +16,36 @@ SECRET = "sk-test-SECRET-123"
 
 
 def gainers_payload(now_ns):
-    return {"status": "OK", "tickers": [
-        {"ticker": "ZNTR", "todaysChangePerc": 21.5, "updated": now_ns,
-         "prevDay": {"c": 5.0, "v": 900000}, "lastQuote": {"p": 6.0, "P": 6.02}},
-        {"ticker": "QBLT", "prevDay": {"c": 12.0}, "updated": now_ns},
-    ]}
+    return {
+        "status": "OK",
+        "tickers": [
+            {
+                "ticker": "ZNTR",
+                "todaysChangePerc": 21.5,
+                "updated": now_ns,
+                "prevDay": {"c": 5.0, "v": 900000},
+                "lastQuote": {"p": 6.0, "P": 6.02},
+            },
+            {"ticker": "QBLT", "prevDay": {"c": 12.0}, "updated": now_ns},
+        ],
+    }
 
 
 def agg_payload(start_ms, n=40, px=6.0):
-    return {"status": "OK", "results": [
-        {"t": start_ms + i * 60_000, "o": px, "h": px + 0.05, "l": px - 0.05, "c": px + 0.01 * (i % 3), "v": 20_000 + i}
-        for i in range(n)]}
+    return {
+        "status": "OK",
+        "results": [
+            {
+                "t": start_ms + i * 60_000,
+                "o": px,
+                "h": px + 0.05,
+                "l": px - 0.05,
+                "c": px + 0.01 * (i % 3),
+                "v": 20_000 + i,
+            }
+            for i in range(n)
+        ],
+    }
 
 
 class Recorder:
@@ -45,8 +64,15 @@ def _backoffs(sleeps):
 def provider_with(handler, feed="delayed", **kw):
     rec = Recorder(handler)
     sleeps: list[float] = []
-    p = MassiveProvider(SECRET, feed=feed, delay_seconds=900, calls_per_second=1000,
-                        transport=httpx.MockTransport(rec), sleep=sleeps.append, **kw)
+    p = MassiveProvider(
+        SECRET,
+        feed=feed,
+        delay_seconds=900,
+        calls_per_second=1000,
+        transport=httpx.MockTransport(rec),
+        sleep=sleeps.append,
+        **kw,
+    )
     return p, rec, sleeps
 
 
@@ -66,16 +92,32 @@ def test_feed_labels_are_honest():
     delayed, _, _ = provider_with(lambda r: httpx.Response(200, json={}), feed="delayed")
     realtime, _, _ = provider_with(lambda r: httpx.Response(200, json={}), feed="realtime")
     d, r = delayed.feed_info(), realtime.feed_info()
-    assert d.kind == FeedKind.DELAYED and "DELAYED" in d.label and d.delay_seconds == 900 and not d.to_dict()["is_realtime"]
+    assert (
+        d.kind == FeedKind.DELAYED
+        and "DELAYED" in d.label
+        and d.delay_seconds == 900
+        and not d.to_dict()["is_realtime"]
+    )
     assert r.kind == FeedKind.REALTIME and r.to_dict()["is_realtime"]
 
 
 def test_parse_aggregates_handles_empty_and_bad_rows():
     assert parse_aggregates({"status": "OK"}).empty
-    df = parse_aggregates({"results": [
-        {"t": 1_700_000_000_000, "o": 1, "h": 1.1, "l": 0.9, "c": 1.0, "v": 10},
-        {"t": 1_700_000_060_000, "o": 1, "h": 0.5, "l": 0.9, "c": 1.0, "v": 10},   # high < close -> malformed
-    ]})
+    df = parse_aggregates(
+        {
+            "results": [
+                {"t": 1_700_000_000_000, "o": 1, "h": 1.1, "l": 0.9, "c": 1.0, "v": 10},
+                {
+                    "t": 1_700_000_060_000,
+                    "o": 1,
+                    "h": 0.5,
+                    "l": 0.9,
+                    "c": 1.0,
+                    "v": 10,
+                },  # high < close -> malformed
+            ]
+        }
+    )
     assert len(df) == 1 and str(df.index.tz) == "UTC"
 
 
@@ -84,7 +126,11 @@ def test_retry_on_429_with_bounded_backoff_then_success():
 
     def handler(req):
         calls["n"] += 1
-        return httpx.Response(429, headers={"Retry-After": "2"}) if calls["n"] < 3 else httpx.Response(200, json={"tickers": []})
+        return (
+            httpx.Response(429, headers={"Retry-After": "2"})
+            if calls["n"] < 3
+            else httpx.Response(200, json={"tickers": []})
+        )
 
     p, _, sleeps = provider_with(handler)
     assert p.client.gainers() == []
@@ -149,26 +195,38 @@ def test_live_source_builds_contexts_and_labels_missing_data(monkeypatch):
     ctxs = {c.symbol: c for c in src.contexts_at(now)}
     z = ctxs["ZNTR"]
     assert z.meta.prev_close == 5.0
-    assert z.meta.avg_daily_volume is None and z.meta.market_cap is None      # plan lacks daily aggs / reference -> unavailable
+    assert (
+        z.meta.avg_daily_volume is None and z.meta.market_cap is None
+    )  # plan lacks daily aggs / reference -> unavailable
     assert z.quote is not None and z.quote.bid == 6.0
-    assert ctxs["QBLT"].quote is None                                          # no quote in payload -> None
+    assert ctxs["QBLT"].quote is None  # no quote in payload -> None
     horizon = now - timedelta(minutes=15) - timedelta(minutes=1)
-    assert (z.bars.index <= horizon).all()                                     # delayed feed: nothing newer than now-15m
-    assert src.feed_age_seconds(now) == 0.0                                    # snapshot age == configured delay
-    assert src.feed_age_seconds(now + timedelta(minutes=10)) == pytest.approx(600)  # stale beyond expected delay
+    assert (z.bars.index <= horizon).all()  # delayed feed: nothing newer than now-15m
+    assert src.feed_age_seconds(now) == 0.0  # snapshot age == configured delay
+    assert src.feed_age_seconds(now + timedelta(minutes=10)) == pytest.approx(
+        600
+    )  # stale beyond expected delay
 
 
 def test_http_helpers():
     assert backoff_delays(5, base=1, cap=8, jitter=False) == [1, 2, 4, 8, 8]
     clock = {"t": 0.0}
     slept = []
-    rl = RateLimiter(2.0, clock=lambda: clock["t"], sleep=lambda s: (slept.append(s), clock.__setitem__("t", clock["t"] + s)))
-    rl.wait(); rl.wait(); rl.wait()
+    rl = RateLimiter(
+        2.0,
+        clock=lambda: clock["t"],
+        sleep=lambda s: (slept.append(s), clock.__setitem__("t", clock["t"] + s)),
+    )
+    rl.wait()
+    rl.wait()
+    rl.wait()
     assert slept == [0.5, 0.5]
 
 
 def test_invalid_json_and_4xx_are_distinct_errors():
-    c = httpx.Client(base_url="http://x", transport=httpx.MockTransport(lambda r: httpx.Response(200, content=b"<html>")))
+    c = httpx.Client(
+        base_url="http://x", transport=httpx.MockTransport(lambda r: httpx.Response(200, content=b"<html>"))
+    )
     with pytest.raises(ProviderHTTPError, match="invalid JSON"):
         request_json(c, "GET", "/a", sleep=lambda s: None)
     c2 = httpx.Client(base_url="http://x", transport=httpx.MockTransport(lambda r: httpx.Response(404)))
@@ -189,6 +247,7 @@ def test_client_close_and_historical_download(tmp_path):
     p, rec, _ = provider_with(lambda r: httpx.Response(200, json=agg_payload(start_ms)))
     out = download_dataset(p.client, ["ZNTR"], date(2026, 9, 14), date(2026, 9, 14), tmp_path / "ds")
     import json
+
     man = json.loads((out / "manifest.json").read_text())
     assert man["synthetic"] is False and man["adjusted"] is True and man["timezone"] == "UTC"
     assert "adjusted=true" in str(rec.requests[0].url)

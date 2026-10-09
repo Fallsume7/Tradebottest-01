@@ -51,7 +51,13 @@ class MockExchange:
         with self.lock:
             self.cash = self.starting_cash
             self.holdings: dict[str, dict[str, float]] = {}  # symbol -> {qty, cost}
-            self.prices: dict[str, float] = {"ZNTR": 5.00, "QBLT": 12.40, "VYRO": 2.15, "KLMX": 0.85, "PRXL": 48.20}
+            self.prices: dict[str, float] = {
+                "ZNTR": 5.00,
+                "QBLT": 12.40,
+                "VYRO": 2.15,
+                "KLMX": 0.85,
+                "PRXL": 48.20,
+            }
             self.orders: dict[str, MockOrder] = {}
             self.sessions: set[str] = set()
             self.config = MockConfig()
@@ -103,16 +109,25 @@ class MockExchange:
         px = limit if order_type == "limit" and limit else self.prices[symbol]
         if side == "buy" and qty * px > self.available_cash() + 1e-9:
             return "Insufficient buying power for this order."
-        if side == "sell" and qty > self.holdings.get(symbol, {}).get("qty", 0) - self._pending_sell_qty(symbol):
+        if side == "sell" and qty > self.holdings.get(symbol, {}).get("qty", 0) - self._pending_sell_qty(
+            symbol
+        ):
             return "You do not own enough shares to sell this quantity."
         return None
 
     def _pending_sell_qty(self, symbol: str) -> int:
-        return sum(o.quantity for o in self.orders.values() if o.status == "pending" and o.side == "sell" and o.symbol == symbol)
+        return sum(
+            o.quantity
+            for o in self.orders.values()
+            if o.status == "pending" and o.side == "sell" and o.symbol == symbol
+        )
 
     def available_cash(self) -> float:
-        reserved = sum(o.quantity * (o.limit_price or self.prices.get(o.symbol, 0)) for o in self.orders.values()
-                       if o.status == "pending" and o.side == "buy")
+        reserved = sum(
+            o.quantity * (o.limit_price or self.prices.get(o.symbol, 0))
+            for o in self.orders.values()
+            if o.status == "pending" and o.side == "buy"
+        )
         return self.cash - reserved
 
     def place(self, symbol: str, side: str, qty: int, order_type: str, limit: float | None) -> MockOrder:
@@ -127,7 +142,10 @@ class MockExchange:
                 o.status, o.message = "rejected", err
             self.orders[o.id] = o
             self._orders_placed += 1
-            if self.config.expire_session_after_orders is not None and self._orders_placed >= self.config.expire_session_after_orders:
+            if (
+                self.config.expire_session_after_orders is not None
+                and self._orders_placed >= self.config.expire_session_after_orders
+            ):
                 self.expire_all_sessions()
             self._match()
             return o
@@ -160,21 +178,25 @@ class MockExchange:
                 h["qty"] += o.quantity
                 h["cost"] += o.quantity * px
             else:
-                h = self.holdings.get(o.symbol)
-                if not h or h["qty"] < o.quantity:
+                held = self.holdings.get(o.symbol)
+                if not held or held["qty"] < o.quantity:
                     o.status, o.message = "rejected", "Insufficient shares at execution"
                     continue
-                avg = h["cost"] / h["qty"]
-                h["qty"] -= o.quantity
-                h["cost"] -= avg * o.quantity
+                avg = held["cost"] / held["qty"]
+                held["qty"] -= o.quantity
+                held["cost"] -= avg * o.quantity
                 self.cash += o.quantity * px
-                if h["qty"] == 0:
+                if held["qty"] == 0:
                     del self.holdings[o.symbol]
             o.status, o.fill_price, o.filled_quantity = "filled", px, o.quantity
 
-    def snapshot(self) -> dict[str, object]:
+    def snapshot(self) -> dict[str, float]:
         with self.lock:
             self._match()
             value = sum(h["qty"] * self.prices[s] for s, h in self.holdings.items())
-            return {"cash": self.cash, "holdings_value": value, "total": self.cash + value,
-                    "buying_power": self.available_cash()}
+            return {
+                "cash": self.cash,
+                "holdings_value": value,
+                "total": self.cash + value,
+                "buying_power": self.available_cash(),
+            }

@@ -74,7 +74,9 @@ class ReconciliationReport:
     matched: list[str] = field(default_factory=list)
     missing_externally: list[str] = field(default_factory=list)  # we think we hold it; venue doesn't
     missing_internally: list[str] = field(default_factory=list)  # venue holds it; we don't know
-    quantity_mismatches: list[tuple[str, int, int]] = field(default_factory=list)  # symbol, internal, external
+    quantity_mismatches: list[tuple[str, int, int]] = field(
+        default_factory=list
+    )  # symbol, internal, external
 
     def summary(self) -> str:
         if self.ok:

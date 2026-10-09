@@ -28,8 +28,12 @@ class AuthError(ProviderHTTPError):
 class RateLimiter:
     """Minimum spacing between calls (thread-safe)."""
 
-    def __init__(self, calls_per_second: float, clock: Callable[[], float] = time.monotonic,
-                 sleep: Callable[[float], None] = time.sleep) -> None:
+    def __init__(
+        self,
+        calls_per_second: float,
+        clock: Callable[[], float] = time.monotonic,
+        sleep: Callable[[float], None] = time.sleep,
+    ) -> None:
         self.min_interval = 1.0 / calls_per_second if calls_per_second > 0 else 0.0
         self._clock = clock
         self._sleep = sleep
@@ -79,12 +83,13 @@ def request_json(
         else:
             if resp.status_code == 200:
                 try:
-                    return resp.json()  # type: ignore[no-any-return]
+                    return resp.json()
                 except ValueError as exc:
                     raise ProviderHTTPError(f"invalid JSON from provider: {exc}") from exc
             if resp.status_code in (401, 403):
                 raise AuthError(
-                    f"{resp.status_code}: key rejected or endpoint not included in your plan", status=resp.status_code
+                    f"{resp.status_code}: key rejected or endpoint not included in your plan",
+                    status=resp.status_code,
                 )
             if resp.status_code == 429 or resp.status_code >= 500:
                 retry_after = resp.headers.get("Retry-After")
@@ -93,7 +98,9 @@ def request_json(
                     wait = delays[attempt]
                     if retry_after and retry_after.isdigit():
                         wait = min(float(retry_after), 30.0)  # honour but bound
-                    log.warning("provider throttled/unavailable", extra={"status": resp.status_code, "wait": wait})
+                    log.warning(
+                        "provider throttled/unavailable", extra={"status": resp.status_code, "wait": wait}
+                    )
                     sleep(wait)
                 continue
             raise ProviderHTTPError(f"HTTP {resp.status_code}", status=resp.status_code)

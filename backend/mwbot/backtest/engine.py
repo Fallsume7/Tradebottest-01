@@ -51,13 +51,17 @@ class BacktestConfig(BaseModel):
     risk: RiskConfig = Field(default_factory=RiskConfig)
     costs: CostConfig = Field(default_factory=CostConfig)
     scanner: ScannerConfig = Field(default_factory=ScannerConfig)
-    oos_fraction: float = Field(0.0, ge=0.0, le=0.8)  # chronologically last share of days held out for reporting
+    oos_fraction: float = Field(
+        0.0, ge=0.0, le=0.8
+    )  # chronologically last share of days held out for reporting
     carry_capital: bool = True  # compound across days (False: every day starts from initial capital)
 
     def to_settings(self) -> AppSettings:
         risk = self.risk.model_copy(update={"starting_capital": self.initial_capital})
         return AppSettings(
-            risk=risk, costs=self.costs, scanner=self.scanner,
+            risk=risk,
+            costs=self.costs,
+            scanner=self.scanner,
             strategies=StrategySelection(enabled=list(self.strategies), params=self.strategy_params),
         )
 
@@ -89,9 +93,14 @@ class BacktestResult:
 
     def to_dict(self, include_trades: bool = True) -> dict[str, Any]:
         d: dict[str, Any] = {
-            "id": self.id, "config": self.config, "feed": self.feed,
-            "days": [asdict(dd) for dd in self.days], "equity_curve": self.equity_curve,
-            "summary": self.summary, "warnings": self.warnings, "result_hash": self.result_hash,
+            "id": self.id,
+            "config": self.config,
+            "feed": self.feed,
+            "days": [asdict(dd) for dd in self.days],
+            "equity_curve": self.equity_curve,
+            "summary": self.summary,
+            "warnings": self.warnings,
+            "result_hash": self.result_hash,
         }
         if include_trades:
             d["trades"] = [t.to_dict() for t in self.trades]
@@ -124,9 +133,15 @@ def run_backtest(
 ) -> BacktestResult:
     available = provider.available_dates()
     if available is None and not config.dates:
-        raise DataUnavailableError("This provider can generate any day: pass explicit `dates` for the backtest.")
+        raise DataUnavailableError(
+            "This provider can generate any day: pass explicit `dates` for the backtest."
+        )
     pool = config.dates or available or []
-    dates = [d for d in pool if (config.start is None or d >= config.start) and (config.end is None or d <= config.end)]
+    dates = [
+        d
+        for d in pool
+        if (config.start is None or d >= config.start) and (config.end is None or d <= config.end)
+    ]
     dates = sorted(set(dates))
     if not dates:
         raise DataUnavailableError("no dates selected / available in this dataset")
@@ -169,12 +184,19 @@ def run_backtest(
             daily_dd_equity.append(eq)
         daily_dd_equity.append(end_eq)
         bench = universe_day_return(source) if hasattr(source, "full_day") else 0.0
-        days.append(DayResult(
-            date=d.isoformat(), start_equity=round(start_eq, 2), end_equity=round(end_eq, 2),
-            pnl=round(end_eq - start_eq, 2), return_pct=round((end_eq / start_eq - 1) * 100, 4) if start_eq else 0.0,
-            n_trades=report["n_trades"], benchmark_return_pct=round(bench, 4), unresolved=unresolved,
-            alerts=len(report["alerts"]),
-        ))
+        days.append(
+            DayResult(
+                date=d.isoformat(),
+                start_equity=round(start_eq, 2),
+                end_equity=round(end_eq, 2),
+                pnl=round(end_eq - start_eq, 2),
+                return_pct=round((end_eq / start_eq - 1) * 100, 4) if start_eq else 0.0,
+                n_trades=report["n_trades"],
+                benchmark_return_pct=round(bench, 4),
+                unresolved=unresolved,
+                alerts=len(report["alerts"]),
+            )
+        )
     if progress:
         progress(len(days), len(dates), "done")
 
@@ -182,11 +204,24 @@ def run_backtest(
     warnings = _warnings(config, feed.kind, summary, notes)
     cfg_dump = json.loads(config.model_dump_json())
     trades_canon = [t.to_dict() for t in broker.trades]
-    result_hash = _hash({"cfg": cfg_dump, "trades": trades_canon, "provider": provider.name,
-                         "dates": [d.isoformat() for d in dates]})
+    result_hash = _hash(
+        {
+            "cfg": cfg_dump,
+            "trades": trades_canon,
+            "provider": provider.name,
+            "dates": [d.isoformat() for d in dates],
+        }
+    )
     return BacktestResult(
-        id=result_hash[:12], config=cfg_dump, feed=feed.to_dict(), days=days, trades=list(broker.trades),
-        equity_curve=curve, summary=summary, warnings=warnings, result_hash=result_hash,
+        id=result_hash[:12],
+        config=cfg_dump,
+        feed=feed.to_dict(),
+        days=days,
+        trades=list(broker.trades),
+        equity_curve=curve,
+        summary=summary,
+        warnings=warnings,
+        result_hash=result_hash,
     )
 
 
@@ -208,14 +243,18 @@ def _block(days: list[DayResult], trades: list[Trade]) -> dict[str, Any]:
     return {"n_days": len(days), "total_return_pct": compound(rets), **trade_stats(trades)}
 
 
-def _summarise(config: BacktestConfig, days: list[DayResult], trades: list[Trade], equity_path: list[float]) -> dict[str, Any]:
+def _summarise(
+    config: BacktestConfig, days: list[DayResult], trades: list[Trade], equity_path: list[float]
+) -> dict[str, Any]:
     rets = [d.return_pct for d in days]
     dd_frac, dd_abs = max_drawdown(equity_path)
     final = days[-1].end_equity if days else config.initial_capital
     s: dict[str, Any] = {
         "initial_capital": config.initial_capital,
         "final_equity": final,
-        "total_return_pct": (final / config.initial_capital - 1) * 100 if config.carry_capital else compound(rets),
+        "total_return_pct": (final / config.initial_capital - 1) * 100
+        if config.carry_capital
+        else compound(rets),
         "benchmark_return_pct": compound([d.benchmark_return_pct for d in days]),
         "max_drawdown_pct": dd_frac * 100,
         "max_drawdown_usd": dd_abs,
@@ -235,18 +274,32 @@ def _summarise(config: BacktestConfig, days: list[DayResult], trades: list[Trade
 def _warnings(config: BacktestConfig, kind: FeedKind, summary: dict[str, Any], notes: list[str]) -> list[str]:
     w: list[str] = list(notes)
     if kind == FeedKind.SYNTHETIC:
-        w.append("SYNTHETIC data: results show how the machinery behaves on fabricated prices, not how any strategy performs in real markets.")
+        w.append(
+            "SYNTHETIC data: results show how the machinery behaves on fabricated prices, not how any strategy performs in real markets."
+        )
     else:
-        w.append("Survivorship bias: unless your dataset is point-in-time (includes delisted/halted names as of each date), results are optimistic.")
+        w.append(
+            "Survivorship bias: unless your dataset is point-in-time (includes delisted/halted names as of each date), results are optimistic."
+        )
     n = summary["n_trades"]
     if n < MIN_TRADES_FOR_STATS:
-        w.append(f"Only {n} trades (< {MIN_TRADES_FOR_STATS}): win rate and averages are statistically weak; do not draw conclusions.")
+        w.append(
+            f"Only {n} trades (< {MIN_TRADES_FOR_STATS}): win rate and averages are statistically weak; do not draw conclusions."
+        )
     if summary["n_days"] < 20:
-        w.append(f"Only {summary['n_days']} days: risk-adjusted ratios withheld; one lucky day can dominate the result.")
-    w.append("Fills are modelled from 1-minute bars with documented spread/slippage/participation rules; real fills (queue position, hidden liquidity, halts) differ.")
-    w.append("Tuning parameters on this same data and then reporting it is overfitting; use the out-of-sample split and fresh data.")
+        w.append(
+            f"Only {summary['n_days']} days: risk-adjusted ratios withheld; one lucky day can dominate the result."
+        )
+    w.append(
+        "Fills are modelled from 1-minute bars with documented spread/slippage/participation rules; real fills (queue position, hidden liquidity, halts) differ."
+    )
+    w.append(
+        "Tuning parameters on this same data and then reporting it is overfitting; use the out-of-sample split and fresh data."
+    )
     if summary.get("days_with_unresolved_positions"):
-        w.append(f"{summary['days_with_unresolved_positions']} day(s) ended with unliquidated positions that were force-closed in the simulation.")
+        w.append(
+            f"{summary['days_with_unresolved_positions']} day(s) ended with unliquidated positions that were force-closed in the simulation."
+        )
     return w
 
 
@@ -265,8 +318,20 @@ def compare_strategies(
         runs.append(list(strategy_ids))
     for k, ids in enumerate(runs):
         cfg = base.model_copy(update={"strategies": ids, "name": f"{base.name}: {'+'.join(ids)}"})
-        results.append(run_backtest(provider, cfg, progress=(lambda i, n, d, k=k: progress(k * n + i, len(runs) * n, d)) if progress else None))
+        results.append(run_backtest(provider, cfg, progress=_scaled(progress, k, len(runs))))
     return results
+
+
+def _scaled(
+    progress: Callable[[int, int, str], None] | None, k: int, runs: int
+) -> Callable[[int, int, str], None] | None:
+    if progress is None:
+        return None
+
+    def inner(i: int, n: int, label: str) -> None:
+        progress(k * n + i, runs * n, label)
+
+    return inner
 
 
 def trades_to_csv(trades: list[Trade]) -> str:
@@ -274,8 +339,24 @@ def trades_to_csv(trades: list[Trade]) -> str:
     import io
 
     buf = io.StringIO()
-    cols = ["id", "session_date", "symbol", "strategy", "quantity", "entry_time", "entry_price", "exit_time",
-            "exit_price", "gross_pnl", "commissions", "net_pnl", "return_pct", "hold_minutes", "entry_reason", "exit_reason"]
+    cols = [
+        "id",
+        "session_date",
+        "symbol",
+        "strategy",
+        "quantity",
+        "entry_time",
+        "entry_price",
+        "exit_time",
+        "exit_price",
+        "gross_pnl",
+        "commissions",
+        "net_pnl",
+        "return_pct",
+        "hold_minutes",
+        "entry_reason",
+        "exit_reason",
+    ]
     w = csv.DictWriter(buf, fieldnames=cols)
     w.writeheader()
     for t in trades:
@@ -295,13 +376,22 @@ def summary_to_csv(result: BacktestResult) -> str:
             continue
         w.writerow([k, v])
     w.writerow([])
-    w.writerow(["date", "start_equity", "end_equity", "pnl", "return_pct", "n_trades", "benchmark_return_pct"])
+    w.writerow(
+        ["date", "start_equity", "end_equity", "pnl", "return_pct", "n_trades", "benchmark_return_pct"]
+    )
     for d in result.days:
-        w.writerow([d.date, d.start_equity, d.end_equity, d.pnl, d.return_pct, d.n_trades, d.benchmark_return_pct])
+        w.writerow(
+            [d.date, d.start_equity, d.end_equity, d.pnl, d.return_pct, d.n_trades, d.benchmark_return_pct]
+        )
     return buf.getvalue()
 
 
 __all__ = [
-    "BacktestConfig", "BacktestResult", "DayResult", "run_backtest", "compare_strategies",
-    "trades_to_csv", "summary_to_csv",
+    "BacktestConfig",
+    "BacktestResult",
+    "DayResult",
+    "run_backtest",
+    "compare_strategies",
+    "trades_to_csv",
+    "summary_to_csv",
 ]

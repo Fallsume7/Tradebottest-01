@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 import numpy as np
 import pandas as pd
 
-from mwbot.data.arrays import BarArrays
+from mwbot.data.arrays import BarArrays, index_ns
 from mwbot.data.base import MarketDataSource
 from mwbot.domain import FeedInfo, Quote, SessionInfo, StockContext, StockMeta
 
@@ -30,14 +30,21 @@ class SymbolDay:
 
     def index_ns(self) -> np.ndarray:
         if self._idx_ns is None:
-            self._idx_ns = self.bars.index.as_unit("ns").asi8.copy()
+            self._idx_ns = index_ns(self.bars.index)
         return self._idx_ns
 
 
 class ReplaySource(MarketDataSource):
     """Serves ``SymbolDay`` data bar-by-bar. A bar labelled ``t`` becomes visible at ``t + 1min``."""
 
-    def __init__(self, session: SessionInfo, days: dict[str, SymbolDay], feed: FeedInfo, *, synthetic_quotes: bool = False) -> None:
+    def __init__(
+        self,
+        session: SessionInfo,
+        days: dict[str, SymbolDay],
+        feed: FeedInfo,
+        *,
+        synthetic_quotes: bool = False,
+    ) -> None:
         self.session = session
         self._days = days
         self._feed = feed

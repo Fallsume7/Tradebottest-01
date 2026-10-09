@@ -1,7 +1,7 @@
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy.exc import StatementError
 
 from mwbot.bot.engine import TradingBot
 from mwbot.bot.runner import SessionRunner
@@ -30,13 +30,17 @@ def test_settings_round_trip(store):
     s.strategies.enabled = ["volume_surge"]
     store.save_settings(s)
     again = SqlStore(store.engine).load_settings()
-    assert again.risk.starting_capital == 250_000 and again.scanner.filters.max_price == 33.0 and again.strategies.enabled == ["volume_surge"]
+    assert (
+        again.risk.starting_capital == 250_000
+        and again.scanner.filters.max_price == 33.0
+        and again.strategies.enabled == ["volume_surge"]
+    )
 
 
 def test_datetimes_are_utc_aware_after_round_trip_and_naive_refused(store):
     store.add_equity(datetime(2026, 10, 8, 14, 0, tzinfo=UTC), 100.0, "2026-10-08")
     assert store.equity_history()[0]["ts"].endswith("+00:00")
-    with pytest.raises(Exception):
+    with pytest.raises(StatementError, match="naive datetime"):
         store.add_equity(datetime(2026, 10, 8, 14, 0), 100.0, "2026-10-08")
     assert UTCDateTime().process_result_value(None, None) is None
 
@@ -44,6 +48,7 @@ def test_datetimes_are_utc_aware_after_round_trip_and_naive_refused(store):
 def midday_state(store):
     """Run a scripted session to just after entry and return (broker, bot, runner, source)."""
     from mwbot.calendar import session_for
+
     sess = session_for(TEST_DAY)
     st = settings_for(params=NO_EXITS)
     src = make_source(sess, {"TST": (meta(), runner_day(sess, [(20, 11.7, 28_000), (30, 11.85, 14_000)]))})
@@ -61,15 +66,22 @@ def test_broker_state_survives_restart(store):
     assert "TST" in broker.positions
     pos = broker.positions["TST"]
 
-    fresh_store = SqlStore(store.engine)            # a brand-new process only has the database
+    fresh_store = SqlStore(store.engine)  # a brand-new process only has the database
     revived = PaperBroker(1.0, store=fresh_store)
     assert fresh_store.restore_broker(revived) is True
     assert revived.cash == pytest.approx(broker.cash) and revived.starting_cash == 100_000
     assert set(revived.positions) == {"TST"}
     rp = revived.positions["TST"]
-    assert (rp.quantity, rp.avg_cost, rp.stop_price, rp.strategy) == (pos.quantity, pos.avg_cost, pos.stop_price, pos.strategy)
+    assert (rp.quantity, rp.avg_cost, rp.stop_price, rp.strategy) == (
+        pos.quantity,
+        pos.avg_cost,
+        pos.stop_price,
+        pos.strategy,
+    )
     assert rp.opened_at == pos.opened_at and rp.opened_at.tzinfo is not None
-    assert {o.id: o.status for o in revived.orders.values()} == {o.id: o.status for o in broker.orders.values()}
+    assert {o.id: o.status for o in revived.orders.values()} == {
+        o.id: o.status for o in broker.orders.values()
+    }
     assert len(revived.fills) == len(broker.fills)
     assert revived.equity() == pytest.approx(broker.equity())  # marks are persisted too
 
@@ -88,11 +100,13 @@ def test_restored_broker_is_idempotent_and_continues_numbering(store):
 
 def at_time():
     from mwbot.calendar import session_for
+
     return at(session_for(TEST_DAY), 26)
 
 
 def test_pending_orders_resume_filling_after_restart(store):
     from mwbot.calendar import session_for
+
     sess = session_for(TEST_DAY)
     src = make_source(sess, {"TST": (meta(), runner_day(sess, []))})
     b = PaperBroker(100_000, store=store)
@@ -114,11 +128,23 @@ def test_reset_clears_everything(store):
 
 
 def test_decisions_reports_backtests_persist(store):
-    store.add_decision({"ts": "2026-10-08T14:00:00+00:00", "kind": "entry", "symbol": "TST", "strategy": "s", "message": "bought", "details": {"x": 1}})
+    store.add_decision(
+        {
+            "ts": "2026-10-08T14:00:00+00:00",
+            "kind": "entry",
+            "symbol": "TST",
+            "strategy": "s",
+            "message": "bought",
+            "details": {"x": 1},
+        }
+    )
     assert store.recent_decisions()[0]["message"] == "bought"
     store.save_report({"date": "2026-10-08", "pnl": 1.5, "end_equity": 100_001.5, "pnl_pct": 0.0015})
     store.save_report({"date": "2026-10-08", "pnl": 2.5, "end_equity": 100_002.5, "pnl_pct": 0.0025})
     assert [r["pnl"] for r in store.reports()] == [2.5]
     store.save_backtest("abc", "bt", {"a": 1}, {"total_return_pct": 1.0}, {"trades": []})
-    assert store.list_backtests()[0]["id"] == "abc" and store.get_backtest("abc")["summary"]["total_return_pct"] == 1.0
+    assert (
+        store.list_backtests()[0]["id"] == "abc"
+        and store.get_backtest("abc")["summary"]["total_return_pct"] == 1.0
+    )
     assert store.get_backtest("nope") is None

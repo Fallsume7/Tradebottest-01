@@ -79,7 +79,9 @@ def test_schedule_phases_in_order():
 
 
 def test_schedule_is_configurable():
-    cfg = ScheduleConfig(scanner_start="07:30", observe_minutes=20, last_entry="13:00", liquidation_start="14:30")
+    cfg = ScheduleConfig(
+        scanner_start="07:30", observe_minutes=20, last_entry="13:00", liquidation_start="14:30"
+    )
     sch = build_schedule(date(2026, 10, 8), cfg)
     assert to_chicago(sch.scanner_start).strftime("%H:%M") == "07:30"
     assert to_chicago(sch.entries_start).strftime("%H:%M") == "08:50"

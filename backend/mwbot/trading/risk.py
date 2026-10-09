@@ -20,7 +20,11 @@ class BotState(StrEnum):
 
 
 def size_position(
-    equity: float, price: float, stop_loss_pct: float, cfg: RiskConfig, buying_power: float,
+    equity: float,
+    price: float,
+    stop_loss_pct: float,
+    cfg: RiskConfig,
+    buying_power: float,
     cash_buffer_pct: float = 1.0,
 ) -> tuple[int, dict[str, int]]:
     """Shares to buy = min(risk-based, allocation-based, cash-based). Returns (qty, breakdown)."""
@@ -105,7 +109,9 @@ class RiskManager:
         if not feed_allows_trading:
             reasons.append(feed_block_reason or "data feed does not allow trading")
         if feed_age_seconds > self.cfg.max_data_age_seconds:
-            reasons.append(f"market data stale ({feed_age_seconds:.0f}s > {self.cfg.max_data_age_seconds:.0f}s)")
+            reasons.append(
+                f"market data stale ({feed_age_seconds:.0f}s > {self.cfg.max_data_age_seconds:.0f}s)"
+            )
         if self.daily_loss_breached(equity, stats.start_equity):
             reasons.append(f"daily loss limit {self.cfg.max_daily_loss_pct:g}% reached")
         if symbol in positions or symbol in pending_buy_symbols:

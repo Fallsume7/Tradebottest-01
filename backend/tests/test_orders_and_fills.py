@@ -1,4 +1,4 @@
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 
 import pandas as pd
 import pytest
@@ -18,8 +18,20 @@ T0 = datetime(2026, 10, 8, 14, 0, tzinfo=UTC)
 
 
 def order(side=Side.BUY, qty=100, typ=OrderType.MARKET, limit=None, **kw) -> Order:
-    return Order(id="O1", client_order_id="c1", symbol="TST", side=side, quantity=qty, order_type=typ,
-                 limit_price=limit, time_in_force=TimeInForce.DAY, strategy="t", reason="", created_at=T0, **kw)
+    return Order(
+        id="O1",
+        client_order_id="c1",
+        symbol="TST",
+        side=side,
+        quantity=qty,
+        order_type=typ,
+        limit_price=limit,
+        time_in_force=TimeInForce.DAY,
+        strategy="t",
+        reason="",
+        created_at=T0,
+        **kw,
+    )
 
 
 def bar(o=10.0, h=10.2, low=9.9, c=10.1, v=50_000) -> pd.Series:
@@ -49,7 +61,13 @@ def test_market_buy_fills_at_open_plus_costs():
 
 
 def test_market_sell_fills_below_open():
-    res = try_fill(order(Side.SELL), bar(o=10.0, low=9.0), False, None, CostConfig(slippage_bps=10, assumed_spread_bps=40, impact_bps_per_pct_participation=0))
+    res = try_fill(
+        order(Side.SELL),
+        bar(o=10.0, low=9.0),
+        False,
+        None,
+        CostConfig(slippage_bps=10, assumed_spread_bps=40, impact_bps_per_pct_participation=0),
+    )
     assert res.price == pytest.approx(10.0 * (1 - 0.003), abs=1e-4)
 
 
@@ -77,7 +95,9 @@ def test_no_fill_when_halted_missing_bar_or_thin_volume():
 
 
 def test_larger_orders_pay_more_impact():
-    c = CostConfig(slippage_bps=0, assumed_spread_bps=0, impact_bps_per_pct_participation=5, max_participation=1.0)
+    c = CostConfig(
+        slippage_bps=0, assumed_spread_bps=0, impact_bps_per_pct_participation=5, max_participation=1.0
+    )
     small = try_fill(order(qty=100), bar(h=20, v=100_000), False, None, c)
     large = try_fill(order(qty=10_000), bar(h=20, v=100_000), False, None, c)
     assert large.price > small.price
@@ -86,9 +106,9 @@ def test_larger_orders_pay_more_impact():
 @pytest.mark.parametrize(
     "side,limit,b,expect",
     [
-        (Side.BUY, 9.95, bar(o=10.0, low=9.90), 9.95),   # traded through the limit -> fill at limit
-        (Side.BUY, 9.95, bar(o=10.0, low=9.95), None),   # merely touching is not a fill (conservative)
-        (Side.BUY, 10.5, bar(o=10.0), 10.0),             # opens better than limit -> fill at open
+        (Side.BUY, 9.95, bar(o=10.0, low=9.90), 9.95),  # traded through the limit -> fill at limit
+        (Side.BUY, 9.95, bar(o=10.0, low=9.95), None),  # merely touching is not a fill (conservative)
+        (Side.BUY, 10.5, bar(o=10.0), 10.0),  # opens better than limit -> fill at open
         (Side.SELL, 10.15, bar(o=10.0, h=10.2), 10.15),
         (Side.SELL, 10.2, bar(o=10.0, h=10.2), None),
         (Side.SELL, 9.5, bar(o=10.0), 10.0),
@@ -104,6 +124,6 @@ def test_limit_order_rules(side, limit, b, expect):
 
 def test_commissions_per_share_per_order_and_minimum():
     c = CostConfig(commission_per_share=0.005, commission_per_order=1.0, commission_min_per_order=2.5)
-    assert commission_for(c, 100, True) == pytest.approx(2.5)   # 0.5+1.0=1.5 -> min 2.5
+    assert commission_for(c, 100, True) == pytest.approx(2.5)  # 0.5+1.0=1.5 -> min 2.5
     assert commission_for(c, 1000, True) == pytest.approx(6.0)  # 5+1
     assert commission_for(c, 1000, False) == pytest.approx(5.0)  # follow-up partial: no per-order fee

@@ -15,8 +15,8 @@ from mwbot.strategies.builtin import (
     build_strategy,
 )
 
-from .conftest import ONE, at, build_day, make_source, meta, relaxed_settings
-from .scenarios import PRE, evaluate, fader, inp_for, passed_labels, runner_day, source_for, strong_runner
+from .conftest import at, build_day, make_source, meta, relaxed_settings
+from .scenarios import evaluate, fader, inp_for, passed_labels, runner_day, source_for, strong_runner
 
 
 def sc() -> Scanner:
@@ -24,8 +24,14 @@ def sc() -> Scanner:
 
 
 def position(session, strategy, minutes=20, **kw):
-    base = dict(symbol="TST", quantity=100, avg_cost=11.5, opened_at=at(session, minutes), strategy=strategy,
-                high_water_mark=11.8)
+    base = dict(
+        symbol="TST",
+        quantity=100,
+        avg_cost=11.5,
+        opened_at=at(session, minutes),
+        strategy=strategy,
+        high_water_mark=11.8,
+    )
     base.update(kw)
     return Position(**base)
 
@@ -57,8 +63,17 @@ def test_opening_momentum_rejects_fading_stock(session_info):
 def test_opening_momentum_rvol_check_uses_threshold(session_info):
     bars = strong_runner(session_info)
     src = make_source(session_info, {"TST": (meta(adv=60_000_000), bars)})  # huge ADV -> RVOL < 1
-    ev = evaluate(OpeningMomentum({"min_rvol": 2.0}), src, "TST", 18, Scanner(relaxed_settings().scanner.model_copy(
-        update={"filters": relaxed_settings().scanner.filters.model_copy(update={"min_rvol": 0.0})})))
+    ev = evaluate(
+        OpeningMomentum({"min_rvol": 2.0}),
+        src,
+        "TST",
+        18,
+        Scanner(
+            relaxed_settings().scanner.model_copy(
+                update={"filters": relaxed_settings().scanner.filters.model_copy(update={"min_rvol": 0.0})}
+            )
+        ),
+    )
     assert not passed_labels(ev)["Relative volume"] and not ev.passed
 
 
@@ -79,10 +94,18 @@ def test_gap_continuation_enters_holding_gap(session_info):
 
 
 def test_gap_continuation_rejects_small_gap_and_thin_premarket(session_info):
-    src = make_source(session_info, {"TST": (meta(prev_close=10.4), runner_day(session_info, [(20, 11.5, 20_000)]))})
+    src = make_source(
+        session_info, {"TST": (meta(prev_close=10.4), runner_day(session_info, [(20, 11.5, 20_000)]))}
+    )
     ev = evaluate(GapContinuation(), src, "TST", 15, sc())
     assert not passed_labels(ev)["Gap vs previous close"]  # 10.95 vs prev close 10.4 = 5.3% < 8%
-    thin = evaluate(GapContinuation({"min_premarket_volume": 5_000_000}), source_for(session_info, TST=strong_runner(session_info)), "TST", 15, sc())
+    thin = evaluate(
+        GapContinuation({"min_premarket_volume": 5_000_000}),
+        source_for(session_info, TST=strong_runner(session_info)),
+        "TST",
+        15,
+        sc(),
+    )
     assert not passed_labels(thin)["Premarket volume"]
 
 
@@ -99,7 +122,11 @@ def test_gap_continuation_rejects_failed_gap_and_exits_on_gap_fail(session_info)
 # ----------------------------------------------------------------------------- C: breakout
 def breakout_day(session, volume_at_break=60_000, base_range=0.0, seed=2):
     # 30 min rally, 40 min tight base near 11.3, then a one-minute break to 11.6
-    return runner_day(session, [(30, 11.3, 20_000), (40, 11.3, 8_000), (1, 11.6, volume_at_break), (10, 11.65, 15_000)], seed=seed)
+    return runner_day(
+        session,
+        [(30, 11.3, 20_000), (40, 11.3, 8_000), (1, 11.6, volume_at_break), (10, 11.65, 15_000)],
+        seed=seed,
+    )
 
 
 def test_breakout_enters_volume_confirmed_break(session_info):
@@ -130,11 +157,13 @@ def test_breakout_rejects_wide_range(session_info):
 
 
 def test_breakout_failed_breakout_exit(session_info):
-    day = runner_day(session_info, [(30, 11.3, 20_000), (40, 11.3, 8_000), (1, 11.6, 60_000), (5, 11.0, 30_000)])
+    day = runner_day(
+        session_info, [(30, 11.3, 20_000), (40, 11.3, 8_000), (1, 11.6, 60_000), (5, 11.0, 30_000)]
+    )
     src = source_for(session_info, TST=day)
     s = MomentumBreakout()
     pos = position(session_info, s.id, minutes=71, reference={"breakout_level": 11.35})
-    assert s.evaluate_exit(inp_for(src, "TST", 72, sc()), pos) is None            # held <2 min
+    assert s.evaluate_exit(inp_for(src, "TST", 72, sc()), pos) is None  # held <2 min
     d = s.evaluate_exit(inp_for(src, "TST", 76, sc()), pos)
     assert d is not None and "Failed breakout" in d.reason
 
@@ -158,7 +187,11 @@ def test_volume_surge_rejects_surge_without_price_move(session_info):
 
 def test_volume_surge_rejects_single_print_spike(session_info):
     bars = surge_day(session_info)
-    sparse = bars.drop(bars.index[[(i) for i, ts in enumerate(bars.index) if ts in (at(session_info, 60), at(session_info, 61))]])
+    sparse = bars.drop(
+        bars.index[
+            [(i) for i, ts in enumerate(bars.index) if ts in (at(session_info, 60), at(session_info, 61))]
+        ]
+    )
     src = source_for(session_info, TST=sparse)
     ev = evaluate(VolumeSurge(), src, "TST", 63, sc())
     labels = passed_labels(ev)
@@ -173,7 +206,9 @@ def test_volume_surge_rejects_thin_dollar_volume(session_info):
 
 
 def test_volume_surge_exit_when_volume_fades(session_info):
-    day = runner_day(session_info, [(60, 11.0, 10_000), (3, 11.5, 120_000), (4, 11.4, 2_000), (10, 11.3, 1_500)])
+    day = runner_day(
+        session_info, [(60, 11.0, 10_000), (3, 11.5, 120_000), (4, 11.4, 2_000), (10, 11.3, 1_500)]
+    )
     src = source_for(session_info, TST=day)
     s = VolumeSurge({"baseline_window": 30})
     d = s.evaluate_exit(inp_for(src, "TST", 75, sc()), position(session_info, s.id, minutes=63))
@@ -188,7 +223,15 @@ def test_custom_weighted_thresholds_and_weights(session_info):
     strict = evaluate(CustomWeighted({"entry_threshold": 99}), src, "TST", 18, sc())
     assert not strict.passed
     # putting all weight on a component that is weak changes the score
-    only_liq = evaluate(CustomWeighted({"w_pct_change": 0, "w_rvol": 0, "w_momentum": 0, "w_vwap": 0, "w_near_high": 0, "w_liquidity": 1}), src, "TST", 18, sc())
+    only_liq = evaluate(
+        CustomWeighted(
+            {"w_pct_change": 0, "w_rvol": 0, "w_momentum": 0, "w_vwap": 0, "w_near_high": 0, "w_liquidity": 1}
+        ),
+        src,
+        "TST",
+        18,
+        sc(),
+    )
     assert only_liq.conditions[2].detail != base.conditions[2].detail
 
 

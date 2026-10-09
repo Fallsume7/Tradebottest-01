@@ -9,8 +9,6 @@ from mwbot.api.app import create_app
 from mwbot.config import EnvSettings
 from mwbot.service import AppService
 
-from .conftest import SAMPLE_DIR
-
 
 @pytest.fixture()
 def svc(tmp_env):
@@ -37,16 +35,37 @@ def test_health_and_default_status_is_demo_and_labelled(client):
     assert client.get("/api/health").json() == {"ok": True, "version": "0.1.0", "real_money": False}
     st = client.get("/api/status").json()
     assert st["data_mode"] == "demo" and st["real_money"] is False
-    assert st["feed"]["kind"] == "synthetic" and "SYNTHETIC" in st["feed"]["label"] and st["feed"]["is_realtime"] is False
-    assert st["portfolio"]["equity"] == 100_000 and st["session_status"] == "idle" and st["bot_state"] == "stopped"
+    assert (
+        st["feed"]["kind"] == "synthetic"
+        and "SYNTHETIC" in st["feed"]["label"]
+        and st["feed"]["is_realtime"] is False
+    )
+    assert (
+        st["portfolio"]["equity"] == 100_000
+        and st["session_status"] == "idle"
+        and st["bot_state"] == "stopped"
+    )
 
 
 def test_full_demo_day_through_the_api(client, svc):
     st = run_instant_day(client, svc)
     assert st["session_status"] == "finished" and st["phase"] == "post_close"
     assert st["session_date"] and st["schedule"]["close"] == "15:00"
-    for ep in ["portfolio/positions", "portfolio/orders", "portfolio/trades", "portfolio/equity", "performance",
-               "decisions", "reports", "scanner", "strategies", "settings", "datasets", "backtests", "logs"]:
+    for ep in [
+        "portfolio/positions",
+        "portfolio/orders",
+        "portfolio/trades",
+        "portfolio/equity",
+        "performance",
+        "decisions",
+        "reports",
+        "scanner",
+        "strategies",
+        "settings",
+        "datasets",
+        "backtests",
+        "logs",
+    ]:
         r = client.get(f"/api/{ep}")
         assert r.status_code == 200, (ep, r.text[:200])
     trades = client.get("/api/portfolio/trades").json()
@@ -54,12 +73,18 @@ def test_full_demo_day_through_the_api(client, svc):
     assert report["n_trades"] == len([t for t in trades if t["session_date"] == report["date"]])
     assert report["liquidation_complete"] in (True, False) and report["benchmark_return_pct"] is not None
     perf = client.get("/api/performance").json()
-    assert perf["equity"] == pytest.approx(st["portfolio"]["equity"]) and perf["daily"][0]["date"] == report["date"]
+    assert (
+        perf["equity"] == pytest.approx(st["portfolio"]["equity"])
+        and perf["daily"][0]["date"] == report["date"]
+    )
     assert client.get("/api/portfolio/equity").json()
     scan = client.get("/api/scanner").json()
     assert scan["results"] and {"score", "components", "reasons", "metrics"} <= set(scan["results"][0])
     # the persisted report file the user can open
-    assert any(p.name.startswith("daily_") for p in (svc.env.data_dir and __import__("pathlib").Path(svc.env.data_dir) / "reports").iterdir())
+    assert any(
+        p.name.startswith("daily_")
+        for p in (svc.env.data_dir and __import__("pathlib").Path(svc.env.data_dir) / "reports").iterdir()
+    )
 
 
 def test_second_session_advances_to_next_trading_day(client, svc):
@@ -87,7 +112,12 @@ def test_step_through_a_session_manually(client, svc):
     st = client.post("/api/session/step", json={"n": 5}).json()
     assert st["sim_time_utc"] > t0 and st["session_status"] == "paused_stream"
     stock = client.get("/api/stocks/" + client.get("/api/scanner").json()["results"][0]["symbol"]).json()
-    assert stock["bars"] and stock["evaluations"] and len(stock["evaluations"]) == 5 and "conditions" in stock["evaluations"][0]
+    assert (
+        stock["bars"]
+        and stock["evaluations"]
+        and len(stock["evaluations"]) == 5
+        and "conditions" in stock["evaluations"][0]
+    )
     assert client.get("/api/stocks/NOPE").status_code == 400
 
 
@@ -101,9 +131,19 @@ def test_settings_validation_and_persistence(client, svc, tmp_env):
     assert ok.status_code == 200 and ok.json()["risk"]["starting_capital"] == 50_000
     assert client.get("/api/status").json()["portfolio"]["equity"] == 50_000
     assert client.put("/api/settings", json={"risk": {"starting_capital": -5}}).status_code == 400
-    assert client.put("/api/settings", json={"schedule": {"last_entry": "15:30", "liquidation_start": "14:45"}}).status_code == 400
+    assert (
+        client.put(
+            "/api/settings", json={"schedule": {"last_entry": "15:30", "liquidation_start": "14:45"}}
+        ).status_code
+        == 400
+    )
     assert client.put("/api/settings", json={"strategies": {"enabled": ["nonsense"]}}).status_code == 400
-    assert client.put("/api/settings", json={"strategies": {"params": {"opening_momentum": {"stop_loss_pct": -1}}}}).status_code == 400
+    assert (
+        client.put(
+            "/api/settings", json={"strategies": {"params": {"opening_momentum": {"stop_loss_pct": -1}}}}
+        ).status_code
+        == 400
+    )
     # persisted for the next process
     again = AppService(tmp_env)
     assert again.settings.risk.max_positions == 3
@@ -131,8 +171,9 @@ def test_manual_orders_idempotency_and_rejections(client, svc):
     filled = next(o for o in orders if o["id"] == a["id"])
     assert filled["status"] == "filled" and filled["filled_quantity"] == 10 and filled["strategy"] == "manual"
     # the bot manages manual positions with the same hard exits, so it may already be closed again: either is valid
-    assert any(p["symbol"] == sym for p in client.get("/api/portfolio/positions").json()) or \
-        any(t["symbol"] == sym and t["strategy"] == "manual" for t in client.get("/api/portfolio/trades").json())
+    assert any(p["symbol"] == sym for p in client.get("/api/portfolio/positions").json()) or any(
+        t["symbol"] == sym and t["strategy"] == "manual" for t in client.get("/api/portfolio/trades").json()
+    )
     over = client.post("/api/orders", json={"symbol": sym, "side": "sell", "quantity": 999_999}).json()
     assert over["status"] == "rejected" and "no shorting" in over["reject_reason"]
     assert client.post("/api/orders", json={"symbol": sym, "side": "hold", "quantity": 1}).status_code == 422
@@ -145,7 +186,7 @@ def test_bot_controls_and_emergency_stop(client):
     assert client.post("/api/bot/pause").json()["state"] == "paused"
     assert client.post("/api/bot/resume").json()["state"] == "running"
     assert client.post("/api/bot/emergency_stop").json()["state"] == "emergency_stop"
-    assert client.post("/api/session/start", json={}).status_code == 400    # blocked while e-stop is active
+    assert client.post("/api/session/start", json={}).status_code == 400  # blocked while e-stop is active
     assert client.post("/api/bot/clear_emergency").json()["state"] == "stopped"
     assert client.post("/api/bot/explode").status_code == 400
 
@@ -161,7 +202,9 @@ def test_account_reset(client, svc):
 def test_historical_mode_replays_dataset_in_order(client, svc):
     assert client.put("/api/settings", json={"data_mode": "historical"}).status_code == 200
     st = client.get("/api/status").json()
-    assert st["feed"]["available"] and st["feed"]["kind"] == "synthetic"   # the bundled sample is synthetic and says so
+    assert (
+        st["feed"]["available"] and st["feed"]["kind"] == "synthetic"
+    )  # the bundled sample is synthetic and says so
     s1 = run_instant_day(client, svc)
     assert s1["session_date"] == "2026-09-14"
     assert run_instant_day(client, svc)["session_date"] == "2026-09-15"
@@ -176,8 +219,12 @@ def test_connected_mode_without_key_fails_clearly_and_safely(client):
 
 
 def test_backtest_job_lifecycle_and_csv_export(client, svc):
-    body = {"name": "api-bt", "dataset": "synthetic_sample", "strategies": ["opening_momentum"],
-            "dates": ["2026-09-14", "2026-09-15"]}
+    body = {
+        "name": "api-bt",
+        "dataset": "synthetic_sample",
+        "strategies": ["opening_momentum"],
+        "dates": ["2026-09-14", "2026-09-15"],
+    }
     job = client.post("/api/backtests", json=body).json()["job_id"]
     for _ in range(600):
         j = client.get(f"/api/backtests/jobs/{job}").json()
@@ -187,7 +234,11 @@ def test_backtest_job_lifecycle_and_csv_export(client, svc):
     assert j["status"] == "done", j
     bt_id = j["result_ids"][0]
     res = client.get(f"/api/backtests/{bt_id}").json()
-    assert res["summary"]["n_days"] == 2 and res["result"]["warnings"] and res["result"]["feed"]["kind"] == "synthetic"
+    assert (
+        res["summary"]["n_days"] == 2
+        and res["result"]["warnings"]
+        and res["result"]["feed"]["kind"] == "synthetic"
+    )
     assert any(b["id"] == bt_id for b in client.get("/api/backtests").json())
     csv_trades = client.get(f"/api/backtests/{bt_id}/export/trades.csv")
     assert csv_trades.status_code == 200 and csv_trades.text.startswith("id,session_date,symbol")
@@ -198,8 +249,18 @@ def test_backtest_job_lifecycle_and_csv_export(client, svc):
 
 
 def test_backtest_rejects_unknown_strategy_and_dataset(client):
-    assert client.post("/api/backtests", json={"strategies": ["magic"], "dataset": "synthetic_sample"}).status_code == 400
-    assert client.post("/api/backtests", json={"strategies": ["opening_momentum"], "dataset": "missing"}).status_code == 400
+    assert (
+        client.post(
+            "/api/backtests", json={"strategies": ["magic"], "dataset": "synthetic_sample"}
+        ).status_code
+        == 400
+    )
+    assert (
+        client.post(
+            "/api/backtests", json={"strategies": ["opening_momentum"], "dataset": "missing"}
+        ).status_code
+        == 400
+    )
     assert client.post("/api/backtests", json={"strategies": []}).status_code == 422
 
 
@@ -238,7 +299,7 @@ def test_restart_recovery_flags_open_exposure(tmp_env):
         c.post("/api/session/step", json={"n": 3})
         assert c.get("/api/portfolio/positions").json()
     s1.close()
-    s2 = AppService(tmp_env)         # simulated restart
+    s2 = AppService(tmp_env)  # simulated restart
     try:
         assert s2.restored and s2.broker.positions
         assert any(a["code"] == "restart_recovery" for a in s2.bot.alerts)

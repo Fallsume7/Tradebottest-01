@@ -87,7 +87,9 @@ class PaperBroker(ExecutionAdapter):
 
     # ------------------------------------------------------------------ accounting
     def equity(self) -> float:
-        return self.cash + sum(p.quantity * self.marks.get(p.symbol, p.avg_cost) for p in self.positions.values())
+        return self.cash + sum(
+            p.quantity * self.marks.get(p.symbol, p.avg_cost) for p in self.positions.values()
+        )
 
     def reserved_cash(self) -> float:
         total = 0.0
@@ -100,10 +102,16 @@ class PaperBroker(ExecutionAdapter):
         return max(self.cash - self.reserved_cash(), 0.0)
 
     def unrealized_pnl(self) -> float:
-        return sum(p.quantity * (self.marks.get(p.symbol, p.avg_cost) - p.avg_cost) for p in self.positions.values())
+        return sum(
+            p.quantity * (self.marks.get(p.symbol, p.avg_cost) - p.avg_cost) for p in self.positions.values()
+        )
 
     def pending_sell_qty(self, symbol: str) -> int:
-        return sum(o.remaining for o in self.orders.values() if o.side == Side.SELL and o.symbol == symbol and not o.is_terminal)
+        return sum(
+            o.remaining
+            for o in self.orders.values()
+            if o.side == Side.SELL and o.symbol == symbol and not o.is_terminal
+        )
 
     def pending_buy_symbols(self) -> set[str]:
         return {o.symbol for o in self.orders.values() if o.side == Side.BUY and not o.is_terminal}
@@ -149,13 +157,23 @@ class PaperBroker(ExecutionAdapter):
 
     def _build(self, req: OrderRequest, now: datetime) -> Order:
         return Order(
-            id=self._next_id(), client_order_id=req.client_order_id, symbol=req.symbol, side=req.side,
-            quantity=req.quantity, order_type=req.order_type, limit_price=req.limit_price,
-            time_in_force=req.time_in_force, strategy=req.strategy, reason=req.reason, created_at=now,
+            id=self._next_id(),
+            client_order_id=req.client_order_id,
+            symbol=req.symbol,
+            side=req.side,
+            quantity=req.quantity,
+            order_type=req.order_type,
+            limit_price=req.limit_price,
+            time_in_force=req.time_in_force,
+            strategy=req.strategy,
+            reason=req.reason,
+            created_at=now,
             meta={**req.meta, "session": self.session_date},
         )
 
-    def submit(self, req: OrderRequest, now: datetime | None = None, expires_at: datetime | None = None) -> Order:
+    def submit(
+        self, req: OrderRequest, now: datetime | None = None, expires_at: datetime | None = None
+    ) -> Order:
         """Submit an order. Idempotent: the same ``client_order_id`` returns the original order."""
         now = now or self.clock()
         existing = self._by_client.get(req.client_order_id)
@@ -170,13 +188,21 @@ class PaperBroker(ExecutionAdapter):
             pos = self.positions.get(req.symbol)
             held = pos.quantity if pos else 0
             if req.quantity > held - self.pending_sell_qty(req.symbol):
-                return self._reject(req, now, f"cannot sell {req.quantity} {req.symbol}: only {held - self.pending_sell_qty(req.symbol)} available (no shorting)")
+                return self._reject(
+                    req,
+                    now,
+                    f"cannot sell {req.quantity} {req.symbol}: only {held - self.pending_sell_qty(req.symbol)} available (no shorting)",
+                )
         else:
             if ref is None:
                 return self._reject(req, now, "no reference price for sizing buying power")
             need = req.quantity * ref * (1.0 if req.order_type == OrderType.LIMIT else 1.005)
             if need > self.buying_power() + 1e-9:
-                return self._reject(req, now, f"insufficient buying power: need ${need:,.2f}, have ${self.buying_power():,.2f}")
+                return self._reject(
+                    req,
+                    now,
+                    f"insufficient buying power: need ${need:,.2f}, have ${self.buying_power():,.2f}",
+                )
         o = self._build(req, now)
         o.meta["ref_price"] = float(ref) if ref is not None else 0.0
         o.eligible_at = now + timedelta(seconds=self.costs.latency_seconds)
@@ -185,8 +211,16 @@ class PaperBroker(ExecutionAdapter):
         self.orders[o.id] = o
         self._by_client[req.client_order_id] = o.id
         self._cursor[o.id] = _ceil_minute(o.eligible_at)
-        self._emit("order_submitted", now, order_id=o.id, symbol=o.symbol, side=str(o.side),
-                   quantity=o.quantity, strategy=o.strategy, reason=o.reason)
+        self._emit(
+            "order_submitted",
+            now,
+            order_id=o.id,
+            symbol=o.symbol,
+            side=str(o.side),
+            quantity=o.quantity,
+            strategy=o.strategy,
+            reason=o.reason,
+        )
         self._persist()
         return o
 
@@ -236,9 +270,13 @@ class PaperBroker(ExecutionAdapter):
         if not o.is_terminal and o.expires_at is not None and now >= o.expires_at:
             o.transition(OrderStatus.EXPIRED, now, "day order expired at close")
             self._emit("order_expired", now, order_id=o.id, symbol=o.symbol, unfilled=o.remaining)
-            log.warning("order expired unfilled", extra={"order": o.id, "symbol": o.symbol, "remaining": o.remaining})
+            log.warning(
+                "order expired unfilled", extra={"order": o.id, "symbol": o.symbol, "remaining": o.remaining}
+            )
 
-    def _apply_fill(self, o: Order, qty: int, price: float, commission: float, when: datetime, note: str) -> None:
+    def _apply_fill(
+        self, o: Order, qty: int, price: float, commission: float, when: datetime, note: str
+    ) -> None:
         if qty <= 0:
             return
         o.apply_fill(qty, price, commission)
@@ -254,8 +292,19 @@ class PaperBroker(ExecutionAdapter):
             o.transition(new, when, note)
         except InvalidTransition as exc:  # pragma: no cover - defensive
             raise ExecutionError(str(exc)) from exc
-        self._emit("fill", when, order_id=o.id, symbol=o.symbol, side=str(o.side), quantity=qty,
-                   price=price, commission=commission, strategy=o.strategy, reason=o.reason, status=str(o.status))
+        self._emit(
+            "fill",
+            when,
+            order_id=o.id,
+            symbol=o.symbol,
+            side=str(o.side),
+            quantity=qty,
+            price=price,
+            commission=commission,
+            strategy=o.strategy,
+            reason=o.reason,
+            status=str(o.status),
+        )
 
     def _apply_buy(self, o: Order, qty: int, price: float, commission: float, when: datetime) -> None:
         self.cash -= qty * price + commission
@@ -264,7 +313,11 @@ class PaperBroker(ExecutionAdapter):
             m = o.meta
             sl, tp = m.get("stop_loss_pct"), m.get("take_profit_pct")
             pos = Position(
-                symbol=o.symbol, quantity=0, avg_cost=price, opened_at=when, strategy=o.strategy,
+                symbol=o.symbol,
+                quantity=0,
+                avg_cost=price,
+                opened_at=when,
+                strategy=o.strategy,
                 entry_reason=o.reason,
                 stop_price=round(price * (1 - sl / 100), 4) if sl else None,
                 take_profit_price=round(price * (1 + tp / 100), 4) if tp else None,
@@ -300,12 +353,22 @@ class PaperBroker(ExecutionAdapter):
         gross = pos.total_sold_proceeds - pos.total_bought_cost
         net = gross - pos.commissions
         trade = Trade(
-            id=f"TRD-{self._trade_counter:06d}", symbol=pos.symbol, strategy=pos.strategy,
-            quantity=pos.total_bought_qty, entry_time=pos.opened_at, entry_price=entry_px, exit_time=when,
-            exit_price=exit_px, gross_pnl=gross, commissions=pos.commissions, net_pnl=net,
+            id=f"TRD-{self._trade_counter:06d}",
+            symbol=pos.symbol,
+            strategy=pos.strategy,
+            quantity=pos.total_bought_qty,
+            entry_time=pos.opened_at,
+            entry_price=entry_px,
+            exit_time=when,
+            exit_price=exit_px,
+            gross_pnl=gross,
+            commissions=pos.commissions,
+            net_pnl=net,
             return_pct=net / pos.total_bought_cost * 100 if pos.total_bought_cost else 0.0,
-            hold_minutes=(when - pos.opened_at).total_seconds() / 60, entry_reason=pos.entry_reason,
-            exit_reason=o.reason, session_date=self.session_date,
+            hold_minutes=(when - pos.opened_at).total_seconds() / 60,
+            entry_reason=pos.entry_reason,
+            exit_reason=o.reason,
+            session_date=self.session_date,
         )
         self.trades.append(trade)
         del self.positions[pos.symbol]
@@ -323,8 +386,17 @@ class PaperBroker(ExecutionAdapter):
             mark = self.marks.get(sym, pos.avg_cost)
             adverse = (self.costs.assumed_spread_bps / 2 + self.costs.slippage_bps) / 1e4
             px = round(mark * (1 - adverse), 4)
-            o = self.submit(OrderRequest(f"force-{self.session_date}-{sym}-{self._counter}", sym, Side.SELL,
-                                         pos.quantity, strategy=pos.strategy, reason=reason), now)
+            o = self.submit(
+                OrderRequest(
+                    f"force-{self.session_date}-{sym}-{self._counter}",
+                    sym,
+                    Side.SELL,
+                    pos.quantity,
+                    strategy=pos.strategy,
+                    reason=reason,
+                ),
+                now,
+            )
             if o.status == OrderStatus.REJECTED:  # pragma: no cover - defensive
                 continue
             self._apply_fill(o, pos.quantity, px, 0.0, now, "forced flatten at last mark")
@@ -334,21 +406,31 @@ class PaperBroker(ExecutionAdapter):
 
     # ------------------------------------------------------------------ ExecutionAdapter
     def check_session(self) -> SessionStatus:
-        return SessionStatus(adapter=self.name, logged_in=True, market_open=None, detail="local virtual engine")
+        return SessionStatus(
+            adapter=self.name, logged_in=True, market_open=None, detail="local virtual engine"
+        )
 
     def get_buying_power(self) -> float:
         return self.buying_power()
 
     def get_holdings(self) -> list[Holding]:
-        return [Holding(p.symbol, p.quantity, p.avg_cost, self.marks.get(p.symbol)) for p in self.positions.values()]
+        return [
+            Holding(p.symbol, p.quantity, p.avg_cost, self.marks.get(p.symbol))
+            for p in self.positions.values()
+        ]
 
     def prepare_order(self, request: OrderRequest) -> PreparedOrder:
         ref = request.limit_price or self.marks.get(request.symbol)
         warnings = []
         if ref is None:
             warnings.append("no reference price available")
-        return PreparedOrder(request=request, adapter=self.name, estimated_price=ref,
-                             estimated_cost=None if ref is None else ref * request.quantity, warnings=warnings)
+        return PreparedOrder(
+            request=request,
+            adapter=self.name,
+            estimated_price=ref,
+            estimated_cost=None if ref is None else ref * request.quantity,
+            warnings=warnings,
+        )
 
     def submit_order(self, prepared: PreparedOrder) -> ExternalOrder:
         o = self.submit(prepared.request)
@@ -365,5 +447,6 @@ class PaperBroker(ExecutionAdapter):
 
     @staticmethod
     def _to_external(o: Order) -> ExternalOrder:
-        return ExternalOrder(o.id, o.client_order_id, o.status, o.filled_quantity,
-                             o.avg_fill_price or None, o.reject_reason)
+        return ExternalOrder(
+            o.id, o.client_order_id, o.status, o.filled_quantity, o.avg_fill_price or None, o.reject_reason
+        )

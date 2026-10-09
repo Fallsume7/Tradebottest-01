@@ -23,7 +23,7 @@ def buy(sym="ZNTR", qty=100, cid="c1", **kw):
 
 def test_login_session_status_and_balances(adapter):
     ad, ex = adapter
-    assert ad.check_session().logged_in is False            # not logged in yet
+    assert ad.check_session().logged_in is False  # not logged in yet
     ad.login()
     st = ad.check_session()
     assert st.logged_in and st.adapter == "mock_browser" and ad.is_real_money is False
@@ -94,7 +94,7 @@ def test_venue_rejection_is_returned_as_rejected_order(adapter):
     ad, ex = adapter
     ad.login()
     p = ad.prepare_order(buy(qty=5, cid="r1"))
-    ex.config.fail_next_order = True                       # venue glitch between preview and confirm
+    ex.config.fail_next_order = True  # venue glitch between preview and confirm
     ext = ad.submit_order(p)
     assert ext.status == OrderStatus.REJECTED and "temporarily unavailable" in ext.detail
     assert ad.get_holdings() == []
@@ -126,14 +126,16 @@ def test_cancel_pending_limit_order(adapter):
     assert ext.status == OrderStatus.PENDING
     assert ad.cancel_order(ext.external_id) is True
     assert ad.get_order_status(ext.external_id).status == OrderStatus.CANCELED
-    assert ad.cancel_order(ext.external_id) is False       # no longer cancellable
+    assert ad.cancel_order(ext.external_id) is False  # no longer cancellable
     assert ad.get_buying_power() == pytest.approx(100_000)
 
 
 def test_limit_order_fills_when_price_crosses(adapter):
     ad, ex = adapter
     ad.login()
-    ext = ad.submit_order(ad.prepare_order(buy(qty=10, cid="lim2", order_type=OrderType.LIMIT, limit_price=4.0)))
+    ext = ad.submit_order(
+        ad.prepare_order(buy(qty=10, cid="lim2", order_type=OrderType.LIMIT, limit_price=4.0))
+    )
     assert ext.status == OrderStatus.PENDING
     ex.set_prices({"ZNTR": 3.9})
     assert ad.get_order_status(ext.external_id).status == OrderStatus.FILLED
@@ -159,7 +161,7 @@ def test_submission_with_unknown_outcome_does_not_double_order(adapter, monkeypa
     real_wait = page.wait_for_selector
 
     def flaky_wait(*a, **k):
-        page.goto(ad.base_url + "/portfolio")           # lose the confirmation page
+        page.goto(ad.base_url + "/portfolio")  # lose the confirmation page
         raise TimeoutError("lost the response")
 
     monkeypatch.setattr(page, "wait_for_selector", flaky_wait)
@@ -187,7 +189,9 @@ def test_reconciliation_detects_drift_between_bot_and_venue(adapter):
     ok = ad.reconcile([Holding("ZNTR", 100)])
     assert ok.ok and ok.matched == ["ZNTR"]
     bad = ad.reconcile([Holding("ZNTR", 90), Holding("QBLT", 5)])
-    assert not bad.ok and bad.quantity_mismatches == [("ZNTR", 90, 100)] and bad.missing_externally == ["QBLT"]
+    assert (
+        not bad.ok and bad.quantity_mismatches == [("ZNTR", 90, 100)] and bad.missing_externally == ["QBLT"]
+    )
     # something placed by hand on the venue that the bot never knew about
     ex.holdings["KLMX"] = {"qty": 3, "cost": 3.0}
     assert "KLMX" in ad.reconcile([Holding("ZNTR", 100)]).missing_internally
@@ -205,10 +209,12 @@ def test_bot_mirrors_a_whole_session_to_the_browser_venue(mock_site):
     from .test_bot_sessions import NO_EXITS, settings_for
 
     url, ex = mock_site
-    ex.starting_cash = ex.cash = 10_000_000.0       # the venue must afford what the bot sized
+    ex.starting_cash = ex.cash = 10_000_000.0  # the venue must afford what the bot sized
     sess = session_for(TEST_DAY)
     st = settings_for(params=NO_EXITS)
-    src = make_source(sess, {"ZNTR": (meta("ZNTR"), runner_day(sess, [(20, 11.7, 28_000), (30, 11.85, 14_000)]))})
+    src = make_source(
+        sess, {"ZNTR": (meta("ZNTR"), runner_day(sess, [(20, 11.7, 28_000), (30, 11.85, 14_000)]))}
+    )
     ad = MockBrowserAdapter(url, "demo", "demo", timeout_ms=4000)
     try:
         ad.login()
@@ -241,7 +247,9 @@ def test_bot_pauses_when_venue_rejects_a_mirrored_order(mock_site):
     ex.config.reject_symbols = {"ZNTR"}
     sess = session_for(TEST_DAY)
     st = settings_for(params=NO_EXITS)
-    src = make_source(sess, {"ZNTR": (meta("ZNTR"), runner_day(sess, [(20, 11.7, 28_000), (30, 11.85, 14_000)]))})
+    src = make_source(
+        sess, {"ZNTR": (meta("ZNTR"), runner_day(sess, [(20, 11.7, 28_000), (30, 11.85, 14_000)]))}
+    )
     ad = MockBrowserAdapter(url, "demo", "demo", timeout_ms=4000)
     try:
         ad.login()

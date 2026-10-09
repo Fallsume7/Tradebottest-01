@@ -26,28 +26,66 @@ from mwbot.domain import FeedInfo, FeedKind, SessionInfo, StockMeta
 GENERATOR_VERSION = "synthetic-v1"
 
 SYMBOL_POOL: list[tuple[str, str]] = [
-    ("ZNTR", "Zentra Dynamics"), ("QBLT", "Qubolt Energy"), ("VYRO", "Vyro Therapeutics"),
-    ("KLMX", "Kalmex Mining"), ("PRXL", "Praxel Robotics"), ("DRVN", "Drivn Mobility"),
-    ("AXBO", "Axbo Biologics"), ("MNTS", "Montis Labs"), ("SLVR", "Silvera Metals"),
-    ("TRNX", "Tronex Systems"), ("FLUX", "Fluxon Power"), ("OPAL", "Opalis Pharma"),
-    ("BRZO", "Brezo Foods"), ("HYDR", "Hydrion Water"), ("GLXY", "Glaxia Media"),
-    ("NVLT", "Novalt Semiconductor"), ("CRBN", "Carbonic Materials"), ("ECLP", "Eclipta Space"),
-    ("WVRN", "Waveron Wireless"), ("JTSM", "Jetsum Logistics"), ("LMNA", "Lumina Optics"),
-    ("PYRX", "Pyrex Gaming"), ("RDNT", "Radiant Solar"), ("STRK", "Strika Cannabis"),
-    ("TLMN", "Telmon Health"), ("UVXA", "Uvexa Genomics"), ("VRTX9", "Vertexa Analytics"),
-    ("XRTL", "Xertal Aerospace"), ("YNDR", "Yondar Retail"), ("ZPHR", "Zephyra Apparel"),
-    ("ABYS", "Abyssal Marine"), ("BLZR", "Blazr Fitness"), ("CNDR", "Condor Shipping"),
-    ("DYNO", "Dynova Chemicals"), ("EMBR", "Embera Lithium"), ("FRGE", "Forgex Steel"),
-    ("GRVT", "Gravitas Capital"), ("HLIX", "Helixor Bio"), ("IGNT", "Igniton Fuel Cells"),
-    ("JUNO", "Junova Education"), ("KRYP", "Krypta Payments"), ("LUXR", "Luxor Hotels"),
-    ("MRDN", "Meridian Telecom"), ("NMBS", "Nimbus Cloud"), ("ORCH", "Orchard Farms"),
-    ("PLSR", "Pulsar Imaging"), ("QNTM", "Quantum Drift"), ("RVLN", "Revelon Biotech"),
+    ("ZNTR", "Zentra Dynamics"),
+    ("QBLT", "Qubolt Energy"),
+    ("VYRO", "Vyro Therapeutics"),
+    ("KLMX", "Kalmex Mining"),
+    ("PRXL", "Praxel Robotics"),
+    ("DRVN", "Drivn Mobility"),
+    ("AXBO", "Axbo Biologics"),
+    ("MNTS", "Montis Labs"),
+    ("SLVR", "Silvera Metals"),
+    ("TRNX", "Tronex Systems"),
+    ("FLUX", "Fluxon Power"),
+    ("OPAL", "Opalis Pharma"),
+    ("BRZO", "Brezo Foods"),
+    ("HYDR", "Hydrion Water"),
+    ("GLXY", "Glaxia Media"),
+    ("NVLT", "Novalt Semiconductor"),
+    ("CRBN", "Carbonic Materials"),
+    ("ECLP", "Eclipta Space"),
+    ("WVRN", "Waveron Wireless"),
+    ("JTSM", "Jetsum Logistics"),
+    ("LMNA", "Lumina Optics"),
+    ("PYRX", "Pyrex Gaming"),
+    ("RDNT", "Radiant Solar"),
+    ("STRK", "Strika Cannabis"),
+    ("TLMN", "Telmon Health"),
+    ("UVXA", "Uvexa Genomics"),
+    ("VRTX9", "Vertexa Analytics"),
+    ("XRTL", "Xertal Aerospace"),
+    ("YNDR", "Yondar Retail"),
+    ("ZPHR", "Zephyra Apparel"),
+    ("ABYS", "Abyssal Marine"),
+    ("BLZR", "Blazr Fitness"),
+    ("CNDR", "Condor Shipping"),
+    ("DYNO", "Dynova Chemicals"),
+    ("EMBR", "Embera Lithium"),
+    ("FRGE", "Forgex Steel"),
+    ("GRVT", "Gravitas Capital"),
+    ("HLIX", "Helixor Bio"),
+    ("IGNT", "Igniton Fuel Cells"),
+    ("JUNO", "Junova Education"),
+    ("KRYP", "Krypta Payments"),
+    ("LUXR", "Luxor Hotels"),
+    ("MRDN", "Meridian Telecom"),
+    ("NMBS", "Nimbus Cloud"),
+    ("ORCH", "Orchard Farms"),
+    ("PLSR", "Pulsar Imaging"),
+    ("QNTM", "Quantum Drift"),
+    ("RVLN", "Revelon Biotech"),
     ("SYNQ", "Synqra Software"),
 ]
 
 REGIME_MIX: list[tuple[str, int]] = [
-    ("gap_run", 3), ("gap_fade", 3), ("breakout", 3), ("volume_surge", 3), ("opening_runner", 3),
-    ("illiquid_spike", 3), ("halt", 1), ("downtrend", 2),
+    ("gap_run", 3),
+    ("gap_fade", 3),
+    ("breakout", 3),
+    ("volume_surge", 3),
+    ("opening_runner", 3),
+    ("illiquid_spike", 3),
+    ("halt", 1),
+    ("downtrend", 2),
 ]
 
 
@@ -174,16 +212,36 @@ def symbol_profile(seed: int, symbol: str, illiquid: bool) -> SymbolProfile:
     rng = np.random.default_rng(stable_seed(seed, symbol, "profile"))
     tier = rng.random()
     if illiquid:
-        return SymbolProfile(float(np.exp(rng.uniform(np.log(0.4), np.log(4.0)))), float(rng.uniform(15_000, 60_000)),
-                             float(rng.uniform(2e6, 12e6)), 0.0035, True)
+        return SymbolProfile(
+            float(np.exp(rng.uniform(np.log(0.4), np.log(4.0)))),
+            float(rng.uniform(15_000, 60_000)),
+            float(rng.uniform(2e6, 12e6)),
+            0.0035,
+            True,
+        )
     if tier < 0.15:
-        return SymbolProfile(float(np.exp(rng.uniform(np.log(0.5), np.log(2.0)))), float(rng.uniform(400_000, 2_500_000)),
-                             float(rng.uniform(20e6, 200e6)), 0.0030, False)
+        return SymbolProfile(
+            float(np.exp(rng.uniform(np.log(0.5), np.log(2.0)))),
+            float(rng.uniform(400_000, 2_500_000)),
+            float(rng.uniform(20e6, 200e6)),
+            0.0030,
+            False,
+        )
     if tier < 0.85:
-        return SymbolProfile(float(np.exp(rng.uniform(np.log(2.0), np.log(18.0)))), float(rng.uniform(250_000, 3_000_000)),
-                             float(rng.uniform(8e6, 90e6)), 0.0018, False)
-    return SymbolProfile(float(np.exp(rng.uniform(np.log(25.0), np.log(180.0)))), float(rng.uniform(800_000, 6_000_000)),
-                         float(rng.uniform(40e6, 400e6)), 0.0009, False)
+        return SymbolProfile(
+            float(np.exp(rng.uniform(np.log(2.0), np.log(18.0)))),
+            float(rng.uniform(250_000, 3_000_000)),
+            float(rng.uniform(8e6, 90e6)),
+            0.0018,
+            False,
+        )
+    return SymbolProfile(
+        float(np.exp(rng.uniform(np.log(25.0), np.log(180.0)))),
+        float(rng.uniform(800_000, 6_000_000)),
+        float(rng.uniform(40e6, 400e6)),
+        0.0009,
+        False,
+    )
 
 
 def overnight_open_price(prev_close: float, base_price: float, rng: np.random.Generator) -> float:
@@ -193,8 +251,13 @@ def overnight_open_price(prev_close: float, base_price: float, rng: np.random.Ge
 
 
 def _make_symbol(
-    symbol: str, name: str, regime: str, session: SessionInfo, rng: np.random.Generator,
-    prof: SymbolProfile, p0: float,
+    symbol: str,
+    name: str,
+    regime: str,
+    session: SessionInfo,
+    rng: np.random.Generator,
+    prof: SymbolProfile,
+    p0: float,
 ) -> SymbolDay:
     pre_n = int((session.open_utc - session.premarket_open_utc).total_seconds() // 60)
     reg_n = int((session.close_utc - session.open_utc).total_seconds() // 60)
@@ -216,24 +279,24 @@ def _make_symbol(
     high = np.maximum(high, np.maximum(open_, close))
     low = np.minimum(low, np.minimum(open_, close))
 
-    w = np.concatenate([np.full(pre_n, PREMARKET_SHARE / pre_n), (1 - PREMARKET_SHARE) * session_weights(reg_n)])
+    w = np.concatenate(
+        [np.full(pre_n, PREMARKET_SHARE / pre_n), (1 - PREMARKET_SHARE) * session_weights(reg_n)]
+    )
     noise = np.exp(rng.normal(0.0, 0.5, n) - 0.125)
     present = rng.random(n) < plan.trade_prob
     # sparse bars carry the volume of the minutes they stand in for
     vol = adv * w * plan.volmult * noise / np.maximum(plan.trade_prob, 1e-3)
     vol = np.maximum(np.round(vol), 1).astype(np.int64)
 
-    idx = pd.DatetimeIndex(
-        [session.premarket_open_utc + timedelta(minutes=i) for i in range(n)], tz="UTC"
-    )
+    idx = pd.DatetimeIndex([session.premarket_open_utc + timedelta(minutes=i) for i in range(n)], tz="UTC")
     halts: list[tuple[datetime, datetime]] = []
     if plan.halt:
         h0, h1 = plan.halt
         present[h0:h1] = False
         halts.append((idx[h0].to_pydatetime(), idx[min(h1, n - 1)].to_pydatetime()))
-    df = pd.DataFrame(
-        {"open": open_, "high": high, "low": low, "close": close, "volume": vol}, index=idx
-    )[present]
+    df = pd.DataFrame({"open": open_, "high": high, "low": low, "close": close, "volume": vol}, index=idx)[
+        present
+    ]
     df.index.name = "timestamp"
 
     spread_bps = float(np.clip(18 + 40 / np.sqrt(max(adv, 1) / 1e5) + (60 if p0 < 1 else 0), 8, 400))
@@ -313,7 +376,9 @@ class SyntheticProvider(MarketDataProvider):
             kind=FeedKind.SYNTHETIC,
             provider=self.name,
             label="SYNTHETIC demo data - fabricated prices, not a real market",
-            warnings=["All prices, volumes and tickers are generated. Do not infer anything about real markets."],
+            warnings=[
+                "All prices, volumes and tickers are generated. Do not infer anything about real markets."
+            ],
         )
 
     def available_dates(self) -> list[date] | None:
@@ -351,15 +416,19 @@ def write_sample_dataset(out_dir: Path, start: date, end: date, seed: int = 7, n
             m = sd.meta
             meta_rows.append(
                 {
-                    "date": d.isoformat(), "symbol": sym, "name": m.name, "prev_close": m.prev_close,
-                    "avg_daily_volume": m.avg_daily_volume, "market_cap": m.market_cap,
+                    "date": d.isoformat(),
+                    "symbol": sym,
+                    "name": m.name,
+                    "prev_close": m.prev_close,
+                    "avg_daily_volume": m.avg_daily_volume,
+                    "market_cap": m.market_cap,
                     "float_shares": m.float_shares,
                 }
             )
             for s, e in sd.halts:
                 halt_rows.append({"symbol": sym, "start": s.isoformat(), "end": e.isoformat()})
     bars = pd.concat(bars_parts).sort_index(kind="stable")
-    bars.index = bars.index.tz_convert("UTC")
+    bars.index = pd.DatetimeIndex(bars.index).tz_convert("UTC")
     bars.to_csv(out_dir / "bars.csv.gz", index_label="timestamp")
     pd.DataFrame(meta_rows).to_csv(out_dir / "meta.csv", index=False)
     pd.DataFrame(halt_rows, columns=["symbol", "start", "end"]).to_csv(out_dir / "halts.csv", index=False)

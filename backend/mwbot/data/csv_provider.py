@@ -70,7 +70,9 @@ class CsvHistoricalProvider(MarketDataProvider):
     def _load_manifest(self) -> dict[str, object]:
         path = self.directory / "manifest.json"
         if not path.exists():
-            raise DatasetError(f"{path} missing - every dataset must declare its timezone and adjustment status")
+            raise DatasetError(
+                f"{path} missing - every dataset must declare its timezone and adjustment status"
+            )
         m = json.loads(path.read_text(encoding="utf-8"))
         if "timezone" not in m:
             raise DatasetError("manifest.json must declare 'timezone' (e.g. 'UTC' or 'America/New_York')")
@@ -122,17 +124,17 @@ class CsvHistoricalProvider(MarketDataProvider):
         if not p.exists():
             return out
         for row in pd.read_csv(p).itertuples():
-            s = pd.Timestamp(row.start)
-            e = pd.Timestamp(row.end)
+            s = pd.Timestamp(str(row.start))
+            e = pd.Timestamp(str(row.end))
             out.setdefault(str(row.symbol), []).append((s.to_pydatetime(), e.to_pydatetime()))
         return out
 
     def _session_dates(self) -> set[date]:
-        et = self._bars.index.tz_convert("America/New_York")
+        et = pd.DatetimeIndex(self._bars.index).tz_convert("America/New_York")
         return {d for d in set(et.date) if session_for(d) is not None}
 
     def _check_splits(self) -> None:
-        et = self._bars.index.tz_convert("America/New_York")
+        et = pd.DatetimeIndex(self._bars.index).tz_convert("America/New_York")
         daily = self._bars.assign(_d=et.date).groupby(["symbol", "_d"])["close"].last()
         for sym in daily.index.get_level_values(0).unique():
             hits = detect_possible_splits(daily.loc[sym])
@@ -182,15 +184,19 @@ class CsvHistoricalProvider(MarketDataProvider):
         adv = get("avg_daily_volume")
         if prev_close is None or adv is None:
             # derive from strictly earlier sessions
-            et = self._bars.index.tz_convert("America/New_York")
+            et = pd.DatetimeIndex(self._bars.index).tz_convert("America/New_York")
             hist = self._bars[(self._bars["symbol"] == sym) & (et.date < d)]
             if not hist.empty:
-                het = hist.index.tz_convert("America/New_York")
-                reg = hist[(het.time >= pd.Timestamp("09:30").time()) & (het.time < pd.Timestamp("16:00").time())]
+                het = pd.DatetimeIndex(hist.index).tz_convert("America/New_York")
+                reg = hist[
+                    (het.time >= pd.Timestamp("09:30").time()) & (het.time < pd.Timestamp("16:00").time())
+                ]
                 if prev_close is None and not reg.empty:
                     prev_close = float(reg["close"].iloc[-1])
                 if adv is None and not reg.empty:
-                    per_day = reg.groupby(reg.index.tz_convert("America/New_York").date)["volume"].sum()
+                    per_day = reg.groupby(pd.DatetimeIndex(reg.index).tz_convert("America/New_York").date)[
+                        "volume"
+                    ].sum()
                     adv = float(per_day.tail(10).mean())
         name = str(row["name"]) if row is not None and "name" in row.index and pd.notna(row["name"]) else sym
         return StockMeta(
@@ -233,6 +239,7 @@ class CsvHistoricalProvider(MarketDataProvider):
         out: dict[date, float] = {}
         for d in dates:
             src = self.open_session(d)
+            assert isinstance(src, ReplaySource)
             rets: list[float] = []
             for sym in src.symbols():
                 sd = src.full_day(sym)

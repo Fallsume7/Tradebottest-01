@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
+import datetime as dt
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-import datetime as dt
 from pathlib import Path
 from typing import Any
 
@@ -76,8 +76,10 @@ def create_app(service: AppService | None = None, env: EnvSettings | None = None
     if service is not None:
         app.state.service = service
     app.add_middleware(
-        CORSMiddleware, allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
-        allow_methods=["*"], allow_headers=["*"],
+        CORSMiddleware,
+        allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+        allow_methods=["*"],
+        allow_headers=["*"],
     )
 
     def svc(request: Request) -> AppService:
@@ -182,8 +184,9 @@ def create_app(service: AppService | None = None, env: EnvSettings | None = None
 
     @app.post("/api/orders")
     def place_order(request: Request, body: OrderIn) -> dict[str, Any]:
-        return svc(request).manual_order(body.symbol, body.side, body.quantity, body.order_type,
-                                         body.limit_price, body.client_order_id)
+        return svc(request).manual_order(
+            body.symbol, body.side, body.quantity, body.order_type, body.limit_price, body.client_order_id
+        )
 
     @app.delete("/api/orders/{order_id}")
     def cancel_order(request: Request, order_id: str) -> dict[str, bool]:
@@ -197,11 +200,17 @@ def create_app(service: AppService | None = None, env: EnvSettings | None = None
     @app.get("/api/settings")
     def get_settings(request: Request) -> dict[str, Any]:
         s = svc(request)
-        return {"settings": s.settings.model_dump(mode="json"), "env": {
-            "data_mode_default": s.env.data_mode, "execution_mode": s.env.execution_mode,
-            "massive_key_configured": bool(s.env.massive_api_key), "massive_feed": s.env.massive_feed,
-            "timezone": "America/Chicago", "real_money": False,
-        }}
+        return {
+            "settings": s.settings.model_dump(mode="json"),
+            "env": {
+                "data_mode_default": s.env.data_mode,
+                "execution_mode": s.env.execution_mode,
+                "massive_key_configured": bool(s.env.massive_api_key),
+                "massive_feed": s.env.massive_feed,
+                "timezone": "America/Chicago",
+                "real_money": False,
+            },
+        }
 
     @app.put("/api/settings")
     def put_settings(request: Request, patch: dict[str, Any]) -> dict[str, Any]:
@@ -218,9 +227,17 @@ def create_app(service: AppService | None = None, env: EnvSettings | None = None
         risk = s.settings.risk.model_copy(update=body.risk)
         costs = s.settings.costs.model_copy(update=body.costs)
         cfg = BacktestConfig(
-            name=body.name, strategies=body.strategies, strategy_params=body.strategy_params,
-            dates=body.dates, start=body.start, end=body.end, initial_capital=body.initial_capital,
-            risk=risk, costs=costs, scanner=s.settings.scanner, oos_fraction=body.oos_fraction,
+            name=body.name,
+            strategies=body.strategies,
+            strategy_params=body.strategy_params,
+            dates=body.dates,
+            start=body.start,
+            end=body.end,
+            initial_capital=body.initial_capital,
+            risk=risk,
+            costs=costs,
+            scanner=s.settings.scanner,
+            oos_fraction=body.oos_fraction,
         )
         job = s.start_backtest(cfg, body.dataset, compare=body.strategies if body.compare else None)
         return {"job_id": job}
@@ -244,11 +261,18 @@ def create_app(service: AppService | None = None, env: EnvSettings | None = None
     def export(request: Request, bt_id: str, kind: str) -> PlainTextResponse:
         if kind not in ("trades", "summary"):
             raise ServiceError("kind must be trades or summary")
-        return PlainTextResponse(svc(request).backtest_csv(bt_id, kind), media_type="text/csv",
-                                 headers={"Content-Disposition": f'attachment; filename="backtest_{bt_id}_{kind}.csv"'})
+        return PlainTextResponse(
+            svc(request).backtest_csv(bt_id, kind),
+            media_type="text/csv",
+            headers={"Content-Disposition": f'attachment; filename="backtest_{bt_id}_{kind}.csv"'},
+        )
 
     # ---- static dashboard
-    dist = Path(env.frontend_dist) if env.frontend_dist else Path(__file__).resolve().parents[3] / "frontend" / "dist"
+    dist = (
+        Path(env.frontend_dist)
+        if env.frontend_dist
+        else Path(__file__).resolve().parents[3] / "frontend" / "dist"
+    )
     if dist.exists():
         app.mount("/assets", StaticFiles(directory=dist / "assets"), name="assets")
 
@@ -256,6 +280,7 @@ def create_app(service: AppService | None = None, env: EnvSettings | None = None
         def spa(full_path: str) -> FileResponse:
             f = dist / full_path
             return FileResponse(f if full_path and f.is_file() else dist / "index.html")
+
     return app
 
 

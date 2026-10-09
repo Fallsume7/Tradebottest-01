@@ -11,7 +11,11 @@ from mwbot.strategies.base import SignalInput, Strategy
 
 from .conftest import ONE, build_day, make_source, meta
 
-PRE = [(200, 10.0, 1500), (30, 10.95, 6000), (100, 10.95, 3000)]  # 330 premarket minutes, +9.5% gap on $10 prev close
+PRE = [
+    (200, 10.0, 1500),
+    (30, 10.95, 6000),
+    (100, 10.95, 3000),
+]  # 330 premarket minutes, +9.5% gap on $10 prev close
 
 
 def runner_day(session: SessionInfo, regular, p0=10.0, seed=1) -> pd.DataFrame:

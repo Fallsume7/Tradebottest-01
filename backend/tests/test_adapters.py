@@ -2,6 +2,7 @@
 
 import pytest
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
 
 from mwbot.config import EnvSettings
 from mwbot.domain import OrderRequest, Side
@@ -17,8 +18,13 @@ def test_marketwatch_skeleton_does_nothing_and_says_so():
     a = MarketWatchAdapter()
     st = a.check_session()
     assert st.logged_in is False and "not configured" in st.detail
-    for call in (a.get_buying_power, a.get_holdings, lambda: a.prepare_order(OrderRequest("x", "A", Side.BUY, 1)),
-                 lambda: a.cancel_order("1"), lambda: a.get_order_status("1")):
+    for call in (
+        a.get_buying_power,
+        a.get_holdings,
+        lambda: a.prepare_order(OrderRequest("x", "A", Side.BUY, 1)),
+        lambda: a.cancel_order("1"),
+        lambda: a.get_order_status("1"),
+    ):
         with pytest.raises(NotConfiguredError, match="MARKETWATCH_INTEGRATION"):
             call()
 
@@ -45,7 +51,7 @@ def test_factory_refuses_real_money_adapters():
 def test_factory_paper_mode_has_no_external_adapter():
     with pytest.raises(ExecutionError, match="internal broker"):
         create_adapter(EnvSettings(_env_file=None, execution_mode="paper"))
-    with pytest.raises(Exception):
+    with pytest.raises(ValidationError):
         EnvSettings(_env_file=None, execution_mode="marketwatch")  # not a selectable mode
 
 
@@ -86,12 +92,27 @@ def test_site_requires_login_and_rejects_bad_credentials(site):
 def test_site_buy_sell_flow_and_balances(site):
     c, ex = site
     login(c)
-    prev = c.post("/trade/preview", data={"symbol": "ZNTR", "side": "buy", "quantity": "100", "order_type": "market", "limit_price": ""})
-    assert prev.status_code == 200 and "confirm-btn" in prev.text and not ex.orders          # preview never places an order
-    done = c.post("/trade/confirm", data={"symbol": "ZNTR", "side": "buy", "quantity": "100", "order_type": "market", "limit_price": ""})
+    prev = c.post(
+        "/trade/preview",
+        data={"symbol": "ZNTR", "side": "buy", "quantity": "100", "order_type": "market", "limit_price": ""},
+    )
+    assert (
+        prev.status_code == 200 and "confirm-btn" in prev.text and not ex.orders
+    )  # preview never places an order
+    done = c.post(
+        "/trade/confirm",
+        data={"symbol": "ZNTR", "side": "buy", "quantity": "100", "order_type": "market", "limit_price": ""},
+    )
     oid = done.headers["location"].split("placed=")[1]
-    assert ex.orders[oid].status == "filled" and ex.cash == pytest.approx(99_500) and ex.holdings["ZNTR"]["qty"] == 100
-    c.post("/trade/confirm", data={"symbol": "ZNTR", "side": "sell", "quantity": "40", "order_type": "market", "limit_price": ""})
+    assert (
+        ex.orders[oid].status == "filled"
+        and ex.cash == pytest.approx(99_500)
+        and ex.holdings["ZNTR"]["qty"] == 100
+    )
+    c.post(
+        "/trade/confirm",
+        data={"symbol": "ZNTR", "side": "sell", "quantity": "40", "order_type": "market", "limit_price": ""},
+    )
     assert ex.holdings["ZNTR"]["qty"] == 60 and ex.cash == pytest.approx(99_700)
 
 
@@ -108,7 +129,9 @@ def test_site_buy_sell_flow_and_balances(site):
 def test_site_validation_errors_surface_to_the_user(site, form, message):
     c, ex = site
     login(c)
-    r = c.post("/trade/preview", data={"order_type": "market", "limit_price": "", **form}, follow_redirects=True)
+    r = c.post(
+        "/trade/preview", data={"order_type": "market", "limit_price": "", **form}, follow_redirects=True
+    )
     assert message in r.text and not ex.orders
 
 
@@ -133,7 +156,16 @@ def test_site_failure_injection_and_delayed_execution(site):
 def test_site_cancel_pending_limit_order_and_session_expiry(site):
     c, ex = site
     login(c)
-    r = c.post("/trade/confirm", data={"symbol": "ZNTR", "side": "buy", "quantity": "10", "order_type": "limit", "limit_price": "1.00"})
+    r = c.post(
+        "/trade/confirm",
+        data={
+            "symbol": "ZNTR",
+            "side": "buy",
+            "quantity": "10",
+            "order_type": "limit",
+            "limit_price": "1.00",
+        },
+    )
     oid = r.headers["location"].split("placed=")[1]
     assert ex.orders[oid].status == "pending"
     c.post(f"/orders/{oid}/cancel")

@@ -11,8 +11,17 @@ NOW = datetime(2026, 10, 8, 15, 0, tzinfo=UTC)
 
 
 def pos(**kw) -> Position:
-    base = dict(symbol="TST", quantity=100, avg_cost=10.0, opened_at=NOW - timedelta(minutes=10), stop_price=9.5,
-                take_profit_price=11.0, trailing_stop_pct=None, high_water_mark=10.0, max_hold_minutes=None)
+    base = dict(
+        symbol="TST",
+        quantity=100,
+        avg_cost=10.0,
+        opened_at=NOW - timedelta(minutes=10),
+        stop_price=9.5,
+        take_profit_price=11.0,
+        trailing_stop_pct=None,
+        high_water_mark=10.0,
+        max_hold_minutes=None,
+    )
     base.update(kw)
     return Position(**base)
 
@@ -51,7 +60,7 @@ def test_take_profit_uses_bar_high():
 
 def test_trailing_stop_follows_high_water_mark():
     p = pos(stop_price=None, take_profit_price=None, trailing_stop_pct=2.0, high_water_mark=12.0)
-    assert "Trailing stop" in hard_exit_reason(p, 11.9, 11.7, 11.8, NOW)   # trail = 11.76
+    assert "Trailing stop" in hard_exit_reason(p, 11.9, 11.7, 11.8, NOW)  # trail = 11.76
     assert hard_exit_reason(p, 11.9, 11.8, 11.85, NOW) is None
     flat = pos(stop_price=None, take_profit_price=None, trailing_stop_pct=2.0, high_water_mark=10.0)
     assert hard_exit_reason(flat, 10, 9.7, 9.8, NOW) is None  # trailing arms only once in profit
@@ -60,18 +69,35 @@ def test_trailing_stop_follows_high_water_mark():
 def test_time_stop():
     p = pos(stop_price=None, take_profit_price=None, max_hold_minutes=10)
     assert "Time stop" in hard_exit_reason(p, 10, 10, 10, NOW)
-    assert hard_exit_reason(pos(stop_price=None, take_profit_price=None, max_hold_minutes=30), 10, 10, 10, NOW) is None
+    assert (
+        hard_exit_reason(pos(stop_price=None, take_profit_price=None, max_hold_minutes=30), 10, 10, 10, NOW)
+        is None
+    )
 
 
 def test_stop_checked_before_target_when_both_hit():
-    assert "Stop loss" in hard_exit_reason(pos(), 11.5, 9.0, 10.0, NOW)  # wide bar touching both: assume the worst
+    assert "Stop loss" in hard_exit_reason(
+        pos(), 11.5, 9.0, 10.0, NOW
+    )  # wide bar touching both: assume the worst
 
 
 # ------------------------------------------------------------- gate
 def gate(rm: RiskManager, **over):
-    args = dict(state=BotState.RUNNING, phase=Phase.TRADING, symbol="NEW", strategy="s", price=10.0, stop_loss_pct=3.0,
-                equity=100_000.0, buying_power=100_000.0, positions={}, pending_buy_symbols=set(),
-                stats=DayStats(100_000.0), feed_age_seconds=1.0, feed_allows_trading=True)
+    args = dict(
+        state=BotState.RUNNING,
+        phase=Phase.TRADING,
+        symbol="NEW",
+        strategy="s",
+        price=10.0,
+        stop_loss_pct=3.0,
+        equity=100_000.0,
+        buying_power=100_000.0,
+        positions={},
+        pending_buy_symbols=set(),
+        stats=DayStats(100_000.0),
+        feed_age_seconds=1.0,
+        feed_allows_trading=True,
+    )
     args.update(over)
     return rm.check_entry(**args)
 

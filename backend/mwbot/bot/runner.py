@@ -9,7 +9,7 @@ from __future__ import annotations
 import threading
 import time
 from collections.abc import Callable
-from datetime import date, datetime, timedelta
+from datetime import date, timedelta
 from typing import Any
 
 from mwbot.bot.engine import TickReport, TradingBot
