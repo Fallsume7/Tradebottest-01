@@ -40,6 +40,7 @@ class StockMetrics:
     dist_from_high_pct: float | None = None
     high_of_day: float | None = None
     regular_open: float | None = None
+    pct_from_open: float | None = None
     n_bars: int = 0
     last_trade_age_seconds: float = 0.0
     halted: bool = False
@@ -87,6 +88,11 @@ def compute_metrics(ctx: StockContext, short_min: int = 5, long_min: int = 15) -
             m.gap_pct = (m.regular_open / m.prev_close - 1.0) * 100
         if abs(m.pct_change) > 1000:
             m.abnormal.append("pct_change_over_1000")
+
+    if split < n:
+        m.regular_open = float(a.o[split])
+        if m.regular_open > 0:
+            m.pct_from_open = (last / m.regular_open - 1.0) * 100
 
     m.volume = float(a.cum_v[n - 1])
     m.dollar_volume = float(a.cum_dv[n - 1])

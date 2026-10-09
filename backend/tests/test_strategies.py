@@ -251,7 +251,11 @@ def test_every_strategy_documents_itself_and_has_risk_controls(sid):
     d = s.describe()
     assert d["entry_rules"] and d["exit_rules"] and d["risk_rules"] and d["params_schema"]
     assert "guarantee" in d["disclaimer"].lower()
-    assert s.params.stop_loss_pct > 0  # every strategy defines a stop
+    if sid == "expected_opportunity":
+        # plan-based: the stop is derived per trade from volatility (see forecast/plan.py), not a fixed percent
+        assert d["risk_rules"]
+    else:
+        assert s.params.stop_loss_pct > 0  # every other strategy defines a fixed stop
 
 
 @pytest.mark.parametrize("sid", sorted(STRATEGY_CLASSES))

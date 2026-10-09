@@ -15,10 +15,13 @@ from __future__ import annotations
 import math
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from datetime import date
 from typing import Any
 
-from mwbot.config import ScannerConfig, ScannerFilters
+from mwbot.config import GameRules, ScannerConfig, ScannerFilters
 from mwbot.domain import StockContext
+from mwbot.eligibility.models import EligibilityCheck, EligibilityStatus
+from mwbot.eligibility.universe import EligibilityUniverse
 from mwbot.scanner.metrics import StockMetrics, compute_metrics
 
 
@@ -59,12 +62,36 @@ class ScanResult:
     components: list[Component] = field(default_factory=list)
     reasons: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
-    blockers: list[str] = field(default_factory=list)
+    blockers: list[str] = field(default_factory=list)  # ALL filters (classic momentum scan)
+    basic_blockers: list[str] = field(
+        default_factory=list
+    )  # data quality / liquidity only (no momentum filters)
     continuing: bool = False
+    eligibility: EligibilityCheck | None = None  # None = eligibility was not evaluated for this scan
 
     @property
     def tradable(self) -> bool:
+        """Passes every classic filter (including the momentum ones)."""
         return not self.blockers
+
+    @property
+    def basic_ok(self) -> bool:
+        """Liquid, fresh, sane data - regardless of how much the stock has moved."""
+        return not self.basic_blockers
+
+    @property
+    def eligibility_status(self) -> EligibilityStatus:
+        return self.eligibility.status if self.eligibility else EligibilityStatus.UNVERIFIED
+
+    @property
+    def actionable(self) -> bool:
+        """May appear in the PRIMARY recommendations: passes classic filters AND is confirmed tradable in the game."""
+        return self.tradable and self.eligibility is not None and self.eligibility.actionable
+
+    @property
+    def opportunity_ok(self) -> bool:
+        """Eligible for the predictive ranking: basic data checks + confirmed tradable in the game."""
+        return self.basic_ok and self.eligibility is not None and self.eligibility.actionable
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -73,7 +100,12 @@ class ScanResult:
             "rank": self.rank,
             "score": round(self.score, 1),
             "tradable": self.tradable,
+            "basic_ok": self.basic_ok,
+            "actionable": self.actionable,
+            "opportunity_ok": self.opportunity_ok,
             "continuing": self.continuing,
+            "eligibility": self.eligibility.to_dict() if self.eligibility else None,
+            "basic_blockers": self.basic_blockers,
             "metrics": self.metrics.to_dict(),
             "components": [c.to_dict() for c in self.components],
             "reasons": self.reasons,
@@ -123,63 +155,76 @@ def _spread_norm(max_spread: float) -> Callable[[float], float]:
 
 
 class Scanner:
-    def __init__(self, config: ScannerConfig | None = None) -> None:
+    def __init__(self, config: ScannerConfig | None = None, rules: GameRules | None = None) -> None:
         self.config = config or ScannerConfig()
+        self.rules = rules
 
     # ------------------------------------------------------------------ filters
-    def _filters(self, m: StockMetrics) -> tuple[list[str], list[str]]:
+    def _filters(self, m: StockMetrics) -> tuple[list[str], list[str], list[str]]:
+        """Returns (all_blockers, basic_blockers, notes).
+
+        *basic* blockers are about data quality and tradeability (price band, volume, spread, history,
+        freshness, halts, abnormal prints). The remaining ones are the classic *momentum* filters
+        (minimum % change, maximum % change, minimum RVOL) which only the old gainer-style strategies want.
+        """
         f: ScannerFilters = self.config.filters
         missing_exclude = self.config.on_missing_data == "exclude"
         blockers: list[str] = []
+        basic: list[str] = []
         notes: list[str] = []
 
-        def need(value: float | None, label: str) -> bool:
+        def block(msg: str, *, is_basic: bool = True) -> None:
+            blockers.append(msg)
+            if is_basic:
+                basic.append(msg)
+
+        def need(value: float | None, label: str, *, is_basic: bool = True) -> bool:
             """True if value present. If absent: exclude or note, per policy."""
             if value is not None:
                 return True
             if missing_exclude:
-                blockers.append(f"{label} unavailable from this feed")
+                block(f"{label} unavailable from this feed", is_basic=is_basic)
             else:
                 notes.append(f"{label} filter skipped: data unavailable")
             return False
 
         if m.price is None or m.n_bars == 0:
-            return ["no price data yet"], notes
+            return ["no price data yet"], ["no price data yet"], notes
         if m.abnormal:
-            blockers.append("abnormal data: " + ", ".join(m.abnormal))
+            block("abnormal data: " + ", ".join(m.abnormal))
         if f.exclude_halted and m.halted:
-            blockers.append("trading halted")
+            block("trading halted")
         if m.n_bars < f.min_bars:
-            blockers.append(f"only {m.n_bars} bars (<{f.min_bars}) - not enough history")
+            block(f"only {m.n_bars} bars (<{f.min_bars}) - not enough history")
         if m.last_trade_age_seconds > f.max_data_age_seconds:
-            blockers.append(f"last trade {m.last_trade_age_seconds / 60:.1f} min ago (stale/illiquid)")
+            block(f"last trade {m.last_trade_age_seconds / 60:.1f} min ago (stale/illiquid)")
         if not (f.min_price <= m.price <= f.max_price):
-            blockers.append(f"price ${m.price:.2f} outside ${f.min_price:g}-${f.max_price:g}")
-        if need(m.pct_change, "% change"):
+            block(f"price ${m.price:.2f} outside ${f.min_price:g}-${f.max_price:g}")
+        if need(m.pct_change, "% change", is_basic=False):
             assert m.pct_change is not None
             if m.pct_change < f.min_pct_change:
-                blockers.append(f"change {m.pct_change:+.1f}% below {f.min_pct_change:g}%")
+                block(f"change {m.pct_change:+.1f}% below {f.min_pct_change:g}%", is_basic=False)
             if f.max_pct_change is not None and m.pct_change > f.max_pct_change:
-                blockers.append(f"change {m.pct_change:+.1f}% above {f.max_pct_change:g}% (suspicious)")
+                block(f"change {m.pct_change:+.1f}% above {f.max_pct_change:g}% (suspicious)", is_basic=False)
         if m.volume < f.min_volume:
-            blockers.append(f"volume {m.volume:,.0f} below {f.min_volume:,.0f}")
+            block(f"volume {m.volume:,.0f} below {f.min_volume:,.0f}")
         if m.dollar_volume < f.min_dollar_volume:
-            blockers.append(f"dollar volume ${m.dollar_volume:,.0f} below ${f.min_dollar_volume:,.0f}")
-        if f.min_rvol > 0 and need(m.rvol, "relative volume") and (m.rvol or 0) < f.min_rvol:
-            blockers.append(f"RVOL {m.rvol:.1f}x below {f.min_rvol:g}x")
+            block(f"dollar volume ${m.dollar_volume:,.0f} below ${f.min_dollar_volume:,.0f}")
+        if f.min_rvol > 0 and need(m.rvol, "relative volume", is_basic=False) and (m.rvol or 0) < f.min_rvol:
+            block(f"RVOL {m.rvol:.1f}x below {f.min_rvol:g}x", is_basic=False)
         if f.min_market_cap is not None and need(m.market_cap, "market cap"):
             assert m.market_cap is not None
             if m.market_cap < f.min_market_cap:
-                blockers.append(f"market cap ${m.market_cap / 1e6:.0f}M below ${f.min_market_cap / 1e6:.0f}M")
+                block(f"market cap ${m.market_cap / 1e6:.0f}M below ${f.min_market_cap / 1e6:.0f}M")
         if f.max_market_cap is not None and need(m.market_cap, "market cap"):
             assert m.market_cap is not None
             if m.market_cap > f.max_market_cap:
-                blockers.append(f"market cap ${m.market_cap / 1e6:.0f}M above ${f.max_market_cap / 1e6:.0f}M")
+                block(f"market cap ${m.market_cap / 1e6:.0f}M above ${f.max_market_cap / 1e6:.0f}M")
         if f.max_spread_pct is not None and need(m.spread_pct, "bid-ask spread"):
             assert m.spread_pct is not None
             if m.spread_pct > f.max_spread_pct:
-                blockers.append(f"spread {m.spread_pct:.2f}% above {f.max_spread_pct:g}%")
-        return blockers, notes
+                block(f"spread {m.spread_pct:.2f}% above {f.max_spread_pct:g}%")
+        return blockers, basic, notes
 
     # ------------------------------------------------------------------ scoring
     def _components(self, m: StockMetrics) -> list[Component]:
@@ -256,12 +301,18 @@ class Scanner:
         return bool(m.momentum_short > 0 and m.vs_vwap_pct > 0 and m.dist_from_high_pct < 6.0)
 
     # ------------------------------------------------------------------ public
-    def scan_one(self, ctx: StockContext) -> ScanResult:
+    def scan_one(
+        self, ctx: StockContext, universe: EligibilityUniverse | None = None, as_of: date | None = None
+    ) -> ScanResult:
         m = compute_metrics(ctx, self.config.momentum_short_minutes, self.config.momentum_long_minutes)
-        blockers, notes = self._filters(m)
+        blockers, basic, notes = self._filters(m)
         comps = self._components(m)
         reasons, warnings = self._reasons(m, comps)
-        res = ScanResult(
+        elig = None
+        if universe is not None:
+            # Eligibility comes ONLY from the list - never from the fact that market data exists for the ticker.
+            elig = universe.check(ctx.symbol, price=m.price, rules=self.rules, as_of=as_of, exchange_hint="")
+        return ScanResult(
             symbol=ctx.symbol,
             name=ctx.meta.name or ctx.symbol,
             metrics=m,
@@ -270,16 +321,26 @@ class Scanner:
             reasons=reasons,
             warnings=warnings + notes,
             blockers=blockers,
+            basic_blockers=basic,
             continuing=self._continuing(m),
+            eligibility=elig,
         )
-        return res
 
-    def scan(self, contexts: list[StockContext]) -> list[ScanResult]:
-        """Scan all contexts; tradable first by score, then filtered-out (also by score). Ranks are 1-based
-        among tradable symbols; filtered-out symbols get rank 0."""
-        results = [self.scan_one(c) for c in contexts]
-        ok = sorted((r for r in results if r.tradable), key=lambda r: (-r.score, r.symbol))
-        bad = sorted((r for r in results if not r.tradable), key=lambda r: (-r.score, r.symbol))
+    def scan(
+        self,
+        contexts: list[StockContext],
+        universe: EligibilityUniverse | None = None,
+        as_of: date | None = None,
+    ) -> list[ScanResult]:
+        """Classic momentum scan. Order: *actionable* (classic filters + confirmed tradable) first by score, then
+        everything else by score. Ranks are 1-based among actionable symbols; others get rank 0.
+
+        With ``universe=None`` eligibility is not evaluated (unit-test / legacy use): nothing is actionable.
+        """
+        results = [self.scan_one(c, universe, as_of) for c in contexts]
+        key = (lambda r: r.actionable) if universe is not None else (lambda r: r.tradable)
+        ok = sorted((r for r in results if key(r)), key=lambda r: (-r.score, r.symbol))
+        bad = sorted((r for r in results if not key(r)), key=lambda r: (-r.score, r.symbol))
         for i, r in enumerate(ok, 1):
             r.rank = i
         return ok + bad

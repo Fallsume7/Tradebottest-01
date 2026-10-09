@@ -27,14 +27,17 @@ def size_position(
     buying_power: float,
     cash_buffer_pct: float = 1.0,
 ) -> tuple[int, dict[str, int]]:
-    """Shares to buy = min(risk-based, allocation-based, cash-based). Returns (qty, breakdown)."""
+    """Shares to buy = min(risk-based, allocation-based, cash-based, optional game $ cap). Returns (qty, breakdown)."""
     if price <= 0 or equity <= 0 or stop_loss_pct <= 0:
         return 0, {"risk": 0, "allocation": 0, "cash": 0}
     risk_amt = equity * cfg.risk_per_trade_pct / 100
     by_risk = math.floor(risk_amt / (price * stop_loss_pct / 100))
     by_alloc = math.floor(equity * cfg.max_position_pct / 100 / price)
     by_cash = math.floor(max(buying_power, 0) / (price * (1 + cash_buffer_pct / 100)))
-    return max(min(by_risk, by_alloc, by_cash), 0), {"risk": by_risk, "allocation": by_alloc, "cash": by_cash}
+    sizes = {"risk": by_risk, "allocation": by_alloc, "cash": by_cash}
+    if cfg.max_position_value is not None:
+        sizes["game_value_cap"] = math.floor(cfg.max_position_value / price)
+    return max(min(sizes.values()), 0), sizes
 
 
 def hard_exit_reason(
@@ -74,6 +77,8 @@ class DayStats:
     trades_opened: int = 0
     stopped_symbols: set[str] = field(default_factory=set)
     entered_keys: set[tuple[str, str]] = field(default_factory=set)  # (strategy, symbol)
+    last_exit: dict[str, datetime] = field(default_factory=dict)  # symbol -> when we last sold it (cooldown)
+    entry_times: list[datetime] = field(default_factory=list)  # for the entries-per-hour limit
 
 
 class RiskManager:

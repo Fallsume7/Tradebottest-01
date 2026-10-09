@@ -142,6 +142,18 @@ class CsvHistoricalProvider(MarketDataProvider):
                 self.warnings.append(f"{sym}: possible unadjusted split(s) on {hits}")
 
     # ---------------------------------------------------------------- provider API
+    def eligibility_records(self) -> list[object]:
+        """Dated eligibility history shipped with the dataset (``eligibility.csv``), or [] if none."""
+        from mwbot.eligibility.csvio import parse_csv
+
+        p = self.directory / "eligibility.csv"
+        if not p.exists():
+            return []
+        res = parse_csv(p.read_text(encoding="utf-8"), default_source=f"dataset:{self.directory.name}")
+        if res.errors:
+            self.warnings.append(f"eligibility.csv problems: {res.errors[:3]}")
+        return list(res.records)
+
     def feed_info(self) -> FeedInfo:
         synthetic = bool(self._manifest.get("synthetic", False))
         if synthetic:

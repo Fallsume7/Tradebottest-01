@@ -219,6 +219,7 @@ def test_unresolved_positions_are_force_closed_and_flagged():
     res = run_backtest(
         OneDayProvider(src),
         cfg(
+            eligibility="none",  # hand-made provider: no eligibility history exists (and the result says so)
             strategy_params={
                 "opening_momentum": {
                     "take_profit_pct": None,
@@ -226,7 +227,7 @@ def test_unresolved_positions_are_force_closed_and_flagged():
                     "max_hold_minutes": None,
                     "stop_loss_pct": 20.0,
                 }
-            }
+            },
         ),
     )
     assert res.days[0].unresolved == ["TST"]

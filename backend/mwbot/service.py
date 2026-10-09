@@ -19,10 +19,13 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.interval import IntervalTrigger
+from pydantic import ValidationError
 
+from mwbot import settings_schema as schema
 from mwbot.backtest.engine import (
     BacktestConfig,
     BacktestResult,
+    compare_modes,
     compare_strategies,
     run_backtest,
     universe_day_return,
@@ -43,6 +46,7 @@ from mwbot.config import (
     PRESET_FILTERS,
     AppSettings,
     EnvSettings,
+    TradingMode,
     scanner_config_for_preset,
 )
 from mwbot.data.base import DataUnavailableError, MarketDataProvider, MarketDataSource
@@ -51,7 +55,14 @@ from mwbot.data.massive import MassiveProvider
 from mwbot.data.synthetic import SyntheticProvider
 from mwbot.db.store import SqlStore, make_engine
 from mwbot.domain import FeedInfo, FeedKind, OrderRequest, OrderType, Side, TimeInForce, utcnow
+from mwbot.eligibility.csvio import export_csv, parse_csv
+from mwbot.eligibility.demo import demo_seed
+from mwbot.eligibility.models import EligibilityRecord, EligibilityStatus
+from mwbot.eligibility.universe import EligibilityUniverse
+from mwbot.eligibility.verifier import MarketWatchVerifier
 from mwbot.execution.base import ExecutionAdapter
+from mwbot.forecast.jobs import evaluate_models
+from mwbot.forecast.models import Forecaster, HeuristicForecaster, RidgeForecaster
 from mwbot.logging_setup import ring_buffer
 from mwbot.scanner.scanner import Scanner
 from mwbot.strategies.base import SignalInput
@@ -67,6 +78,14 @@ class ServiceError(Exception):
     """User-facing error (HTTP 4xx)."""
 
 
+class SettingsError(ServiceError):
+    """Settings rejected; ``errors`` lists the offending fields so the UI can mark them."""
+
+    def __init__(self, message: str, errors: list[dict[str, str]] | None = None) -> None:
+        super().__init__(message)
+        self.errors = errors or []
+
+
 @dataclass(slots=True)
 class BacktestJob:
     id: str
@@ -76,6 +95,8 @@ class BacktestJob:
     result_ids: list[str] = field(default_factory=list)
     error: str = ""
     cancel: bool = False
+    kind: str = "backtest"  # backtest | compare_modes | model_check
+    payload: dict[str, Any] | None = None
 
 
 class AppService:
@@ -88,11 +109,15 @@ class AppService:
             self.settings.data_mode = self.env.data_mode
         self.provider_error = ""
         self.provider: MarketDataProvider | None = None
+        self._build_provider()
         self.broker = PaperBroker(self.settings.risk.starting_capital, self.settings.costs, store=self.store)
         self.restored = self.store.restore_broker(self.broker)
         self.mirror: ExecutionAdapter | None = None
-        self.bot = TradingBot(self.settings, self.broker)
+        self.eligibility_source = ""
+        self.bot = TradingBot(self.settings, self.broker, eligibility=self._load_universe())
         self.bot.on_decision = self.store.add_decision
+        self.forecaster_info: dict[str, Any] = {}
+        self._apply_forecaster()
         self.runner: SessionRunner | None = None
         self.source: MarketDataSource | None = None
         self.session_status = "idle"  # idle | running | paused_stream | finished | error
@@ -105,11 +130,61 @@ class AppService:
         self._pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="backtest")
         self.scheduler: BackgroundScheduler | None = None
         self._live_runner: SessionRunner | None = None
-        self._build_provider()
+        self.settings_saved_at: str | None = None
         self._build_mirror()
         if self.bot.state == BotState.STOPPED:
             self.bot.state = BotState(self.store.get_kv("bot_state", "stopped"))
         self._recover_after_restart()
+
+    # ------------------------------------------------------------------ eligibility + forecaster
+    def _load_universe(self) -> EligibilityUniverse:
+        """The user's own list. A first-run DEMO install is seeded with a clearly labelled demo list (so demo mode
+        works out of the box); real lists are never invented."""
+        recs = self.store.eligibility_all()
+        self.eligibility_source = "your list"
+        if not recs and self.settings.data_mode == "demo" and not self.store.get_kv("eligibility_seeded"):
+            recs = demo_seed()
+            self.store.eligibility_upsert(recs)
+            self.store.set_kv("eligibility_seeded", True)
+            self.eligibility_source = "demo list (made-up, for demo mode)"
+        elif not recs:
+            ds = getattr(self.provider, "eligibility_records", None)
+            if callable(ds):
+                recs = list(ds())
+                self.eligibility_source = "dataset's own eligibility history"
+        return EligibilityUniverse(recs)
+
+    def refresh_universe(self) -> None:
+        with self.lock:
+            self.bot.set_universe(self._load_universe())
+
+    def _apply_forecaster(self) -> None:
+        choice = self.settings.trading.forecaster
+        model: Forecaster | None = None
+        saved = self.store.get_kv("model:ridge")
+        if saved and choice in ("auto", "statistical"):
+            try:
+                cand = RidgeForecaster.from_dict(saved)
+                if choice == "statistical" or cand.calibrated:
+                    model = cand
+            except (KeyError, ValueError, TypeError):
+                log.warning("saved forecast model could not be loaded; using the rule-based model")
+        self.bot.set_forecaster(model or HeuristicForecaster())
+        used = model if model is not None else self.bot.ranker.forecaster
+        self.forecaster_info = {
+            "name": used.name,
+            "kind": used.kind,
+            "calibrated": bool(getattr(used, "calibrated", False)),
+            "trained_through": getattr(used, "trained_through", "") or None,
+            "label": (
+                "Validated out-of-sample forecast model"
+                if getattr(used, "calibrated", False)
+                else "Rule-of-thumb estimate - not a validated probability"
+                if used.kind == "heuristic"
+                else "Statistical model - NOT validated (treat probabilities as rough)"
+            ),
+            "requested": choice,
+        }
 
     # ------------------------------------------------------------------ setup
     def _build_provider(self) -> None:
@@ -166,52 +241,207 @@ class AppService:
             self.mirror.close()
 
     # ------------------------------------------------------------------ settings
-    def update_settings(self, patch: dict[str, Any]) -> AppSettings:
+    def settings_schema(self) -> dict[str, Any]:
         with self.lock:
-            running = self.session_status == "running"
+            out = schema.build_schema(self.settings)
+            out["saved_at"] = self.settings_saved_at
+            out["open_positions"] = len(self.broker.positions)
+            out["session_running"] = self.session_status in ("running", "paused_stream")
+            return out
+
+    def _install(self, new: AppSettings) -> AppSettings:
+        """Make ``new`` the live configuration. Caller holds the lock and has validated ``new``."""
+        old = self.settings
+        running = self.session_status in ("running", "paused_stream", "live")
+        busy = running or bool(self.broker.positions)
+        locked = [
+            k for k in ("data_mode", "demo_seed", "historical_dataset") if getattr(new, k) != getattr(old, k)
+        ]
+        if new.risk.starting_capital != old.risk.starting_capital and (
+            busy or self.broker.trades or self.broker.fills
+        ):
+            locked.append("risk.starting_capital")
+        if locked and busy:
+            raise SettingsError(
+                f"Stop the session and close positions before changing: {', '.join(locked)}. "
+                "Everything else can be changed while the bot runs.",
+                [{"path": k, "message": "Cannot change while running or holding positions."} for k in locked],
+            )
+        if "risk.starting_capital" in locked:
+            raise SettingsError(
+                "Starting capital can only change on a fresh account. Reset the account first.",
+                [
+                    {
+                        "path": "risk.starting_capital",
+                        "message": "Reset the account to change starting capital.",
+                    }
+                ],
+            )
+        mode_changed = (
+            new.data_mode != old.data_mode
+            or new.demo_seed != old.demo_seed
+            or new.historical_dataset != old.historical_dataset
+        )
+        capital_changed = new.risk.starting_capital != old.risk.starting_capital
+        self.settings = new
+        self.bot.apply_settings(new)
+        if capital_changed and not self.broker.trades and not self.broker.positions:
+            self.broker.cash = self.broker.starting_cash = new.risk.starting_capital
+            self.broker._persist()
+        if new.schedule != old.schedule and self.runner is not None and not self.runner.finished:
+            sched = build_schedule(date.fromisoformat(self.runner.schedule.session.date), new.schedule)
+            if sched is not None:
+                self.runner.schedule = sched  # rules for the rest of today change too
+        if mode_changed:
+            self._build_provider()
+            self.refresh_universe()
+        if new.trading.forecaster != old.trading.forecaster:
+            self._apply_forecaster()
+        self.store.save_settings(new)
+        self.settings_saved_at = utcnow().isoformat()
+        self._sync_scheduler()
+        return new
+
+    def update_settings(self, patch: dict[str, Any]) -> AppSettings:
+        """Nested patch (used by presets and older clients)."""
+        with self.lock:
             merged = _deep_merge(self.settings.model_dump(mode="json"), patch)
             try:
                 new = AppSettings.model_validate(merged)
-                for sid in new.strategies.enabled:
+                for sid in {*new.strategies.enabled, *new.strategies.params}:
                     build_strategy(sid, new.strategies.params.get(sid))
             except Exception as exc:
                 raise ServiceError(f"Invalid settings: {exc}") from exc
-            if running:
-                locked = [
-                    k
-                    for k in (
-                        "data_mode",
-                        "demo_seed",
-                        "historical_dataset",
-                        "schedule",
-                        "costs",
-                        "auto_schedule",
-                    )
-                    if getattr(new, k) != getattr(self.settings, k)
-                ]
-                if new.risk.starting_capital != self.settings.risk.starting_capital:
-                    locked.append("risk.starting_capital")
-                if locked:
-                    raise ServiceError(
-                        f"Stop the running session before changing: {', '.join(locked)}. "
-                        "Scanner, strategy and risk-limit changes are allowed live."
-                    )
-            mode_changed = (
-                new.data_mode != self.settings.data_mode
-                or new.demo_seed != self.settings.demo_seed
-                or new.historical_dataset != self.settings.historical_dataset
+            return self._install(new)
+
+    def _base_for_changes(self, changes: dict[str, Any]) -> tuple[AppSettings, dict[str, Any]]:
+        """A mode change is applied first (swapping in that mode's risk block) so ``mode.*`` paths in the same
+        request refer to the NEW mode."""
+        rest = dict(changes)
+        mode = rest.pop("trading.mode", None)
+        if mode is None or mode == self.settings.trading.mode.value:
+            return self.settings, rest
+        if mode not in {m.value for m in TradingMode}:
+            raise SettingsError(
+                "Unknown trading mode.", [{"path": "trading.mode", "message": "Pick one of the two modes."}]
             )
-            capital_changed = new.risk.starting_capital != self.settings.risk.starting_capital
-            self.settings = new
-            self.bot.apply_settings(new)
-            if capital_changed and not self.broker.trades and not self.broker.positions:
-                self.broker.cash = self.broker.starting_cash = new.risk.starting_capital
-                self.broker._persist()
-            if mode_changed:
-                self._build_provider()
-            self.store.save_settings(new)
-            self._sync_scheduler()
-            return new
+        return self.settings.with_mode(TradingMode(mode)), rest
+
+    def preview_changes(self, changes: dict[str, Any]) -> dict[str, Any]:
+        """What WOULD happen, without saving anything."""
+        with self.lock:
+            base, rest = self._base_for_changes(changes)
+            new, errors = schema.apply_changes(base, rest)
+            effects = schema.effects_of(
+                self.settings,
+                changes,
+                session_running=self.session_status in ("running", "paused_stream", "live"),
+                open_positions=len(self.broker.positions),
+            )
+            return {"valid": not errors, "errors": errors, "effects": effects}
+
+    def update_changes(self, changes: dict[str, Any]) -> dict[str, Any]:
+        """Flat ``{path: value}`` changes from the Settings page (validated on the server with the same bounds)."""
+        with self.lock:
+            if not changes:
+                return {
+                    "settings": self.settings.model_dump(mode="json"),
+                    "effects": [],
+                    "saved_at": self.settings_saved_at,
+                }
+            base, rest = self._base_for_changes(changes)
+            new, errors = schema.apply_changes(base, rest)
+            if errors or new is None:
+                raise SettingsError("; ".join(e["message"] for e in errors), errors)
+            effects = schema.effects_of(
+                self.settings,
+                changes,
+                session_running=self.session_status in ("running", "paused_stream", "live"),
+                open_positions=len(self.broker.positions),
+            )
+            try:
+                for sid in new.strategies.enabled:
+                    build_strategy(sid, new.strategies.params.get(sid))
+            except Exception as exc:
+                raise SettingsError(f"Invalid strategy settings: {exc}") from exc
+            self._install(new)
+            return {
+                "settings": self.settings.model_dump(mode="json"),
+                "effects": effects,
+                "saved_at": self.settings_saved_at,
+            }
+
+    def set_mode(self, mode: str) -> dict[str, Any]:
+        with self.lock:
+            before = self.settings.trading.mode.value
+            res = self.update_changes({"trading.mode": mode})
+            res["mode"] = {
+                "from": before,
+                "to": self.settings.trading.mode.value,
+                "open_positions": len(self.broker.positions),
+                "message": (
+                    f"Now trading in {self.settings.trading.mode.label} mode. New trades use its rules; "
+                    + (
+                        f"your {len(self.broker.positions)} open position(s) keep the plan they were opened with. "
+                        if self.broker.positions
+                        else ""
+                    )
+                    + "Trade history is unchanged."
+                ),
+            }
+            return res
+
+    def reset_settings(self, category: str | None = None) -> dict[str, Any]:
+        with self.lock:
+            if category and category not in {c["id"] for c in schema.CATEGORIES}:
+                raise ServiceError(f"unknown settings category {category!r}")
+            busy = self.session_status in ("running", "paused_stream", "live") or bool(self.broker.positions)
+            changes = {
+                p: v
+                for p, v in schema.recommended_changes(self.settings, category).items()
+                if not (busy and schema.BY_PATH[p].effect == "idle_only")
+            }
+            res = self.update_changes(changes)
+            res["reset"] = category or "all"
+            return res
+
+    def export_settings(self) -> dict[str, Any]:
+        with self.lock:
+            return {
+                "app": "MarketWatchBot",
+                "format": 1,
+                "exported_at": utcnow().isoformat(),
+                "note": "Settings only - no keys, no account data. Safe to share.",
+                "settings": self.settings.model_dump(mode="json"),
+            }
+
+    def import_settings(self, payload: dict[str, Any], apply: bool = True) -> dict[str, Any]:
+        with self.lock:
+            if payload.get("app") != "MarketWatchBot" or "settings" not in payload:
+                raise SettingsError("This file is not a MarketWatchBot settings export.")
+            if int(payload.get("format", 0)) != 1:
+                raise SettingsError("Unsupported settings file version.")
+            try:
+                new = AppSettings.model_validate(payload["settings"])
+            except ValidationError as exc:
+                errs = schema.friendly_errors(exc)
+                raise SettingsError(
+                    "The file's settings are not valid: " + "; ".join(e["message"] for e in errs), errs
+                ) from exc
+            changes = {
+                f.path: schema.get_value(new, f.path)
+                for f in schema.FIELDS
+                if not schema._same(schema.get_value(new, f.path), schema.get_value(self.settings, f.path))
+            }
+            effects = schema.effects_of(
+                self.settings,
+                changes,
+                session_running=self.session_status in ("running", "paused_stream", "live"),
+                open_positions=len(self.broker.positions),
+            )
+            if apply:
+                self._install(new)
+            return {"applied": apply, "n_changes": len(changes), "effects": effects}
 
     def apply_scanner_preset(self, name: str) -> AppSettings:
         if name not in PRESET_FILTERS:
@@ -377,6 +607,13 @@ class AppService:
 
     # ------------------------------------------------------------------ bot controls
     def control(self, action: str) -> dict[str, Any]:
+        """start | pause | resume | stop | flatten | emergency_stop | clear_emergency.
+
+        pause   = no NEW entries; positions are still managed.
+        stop    = no new entries and no more rank/scan work; positions are STILL managed until flat.
+        flatten = sell everything now but keep the bot as it was.
+        emergency_stop = block entries and (by default) sell everything; must be cleared before restarting.
+        """
         with self.lock:
             if action == "start":
                 self.bot.start()
@@ -384,6 +621,12 @@ class AppService:
                 self.bot.pause()
             elif action == "resume":
                 self.bot.resume()
+            elif action == "stop":
+                self.bot.stop()
+            elif action == "flatten":
+                if not self.broker.positions:
+                    raise ServiceError("There are no open positions to close.")
+                self.bot.request_flatten()
             elif action == "emergency_stop":
                 self.bot.emergency_stop()
             elif action == "clear_emergency":
@@ -392,7 +635,13 @@ class AppService:
                 raise ServiceError(f"unknown action {action!r}")
             self.store.set_kv("bot_state", str(self.bot.state))
             self.broker._persist()
-            return {"state": str(self.bot.state)}
+            return {"state": str(self.bot.state), "action": action}
+
+    def close_position(self, symbol: str) -> dict[str, Any]:
+        with self.lock:
+            if not self.bot.request_close(symbol):
+                raise ServiceError(f"{symbol.upper()} is not an open position.")
+            return {"closing": symbol.upper()}
 
     def reset_account(self) -> None:
         with self.lock:
@@ -404,8 +653,11 @@ class AppService:
             self.broker = PaperBroker(
                 self.settings.risk.starting_capital, self.settings.costs, store=self.store
             )
-            self.bot = TradingBot(self.settings, self.broker, mirror=self.mirror)
+            self.bot = TradingBot(
+                self.settings, self.broker, mirror=self.mirror, eligibility=self._load_universe()
+            )
             self.bot.on_decision = self.store.add_decision
+            self._apply_forecaster()
             self.runner = None
             self.source = None
             self.last_report = None
@@ -526,20 +778,89 @@ class AppService:
                     "open_positions": len(b.positions),
                     "pending_orders": len(b.open_orders()),
                 },
+                "mode": {
+                    "id": self.settings.trading.mode.value,
+                    "label": self.settings.trading.mode.label,
+                    "recommended": self.settings.trading.mode == TradingMode.MAX_EXPECTED_RETURN,
+                },
+                "market": self._market_status(),
+                "bot": {
+                    "state": str(self.bot.state),
+                    "entries_allowed": self.bot.state == BotState.RUNNING and not self.bot.daily_halted,
+                    "daily_loss_halt": self.bot.daily_halted,
+                    "emergency_behavior": self.settings.trading.emergency_behavior,
+                },
+                "forecaster": self.forecaster_info,
+                "eligibility": {
+                    "applied": not self.bot.universe.ignore,
+                    "n_tickers": len(self.bot.universe),
+                    "source": self.eligibility_source,
+                },
+                "settings_saved_at": self.settings_saved_at,
+                "ui": self.settings.ui.model_dump(mode="json"),
                 "alerts": list(self.bot.alerts)[-10:],
                 "alerts_critical": sum(1 for a in self.bot.alerts if a["level"] == "critical"),
                 "scheduler_enabled": bool(self.scheduler and self.scheduler.get_job("live_tick")),
                 "restored_from_db": self.restored,
             }
 
+    def _elig_as_of(self) -> date | None:
+        return self.bot._elig_date(self.runner.schedule) if self.runner else None
+
+    def _market_status(self) -> dict[str, Any]:
+        """Plain-language market state for the top bar (simulated clock when replaying)."""
+        labels = {
+            "premarket_scan": ("Pre-market", False),
+            "observing_open": ("Open - watching the open", True),
+            "trading": ("Open", True),
+            "no_new_entries": ("Open - no new trades", True),
+            "liquidating": ("Open - closing positions", True),
+            "final_check": ("Open - final check", True),
+            "post_close": ("Closed", False),
+            "closed": ("Closed", False),
+        }
+        if self.runner is None:
+            return {"phase": "idle", "label": "No session running", "open": False, "simulated": True}
+        phase = "post_close" if self.runner.finished else str(self.bot.phase)
+        label, is_open = labels.get(phase, (phase, False))
+        simulated = self.settings.data_mode != "connected"
+        return {
+            "phase": phase,
+            "label": label + (" (simulated clock)" if simulated else ""),
+            "open": is_open,
+            "simulated": simulated,
+        }
+
     def positions(self) -> list[dict[str, Any]]:
+        """Open positions with their plan, progress toward target/stop/deadline, and eligibility flag."""
         with self.lock:
+            now = self._now()
+            as_of = self._elig_as_of()
+            close = self.runner.schedule.close if self.runner else None
             out = []
             for p in self.broker.positions.values():
                 mark = self.broker.marks.get(p.symbol, p.avg_cost)
                 pending = [
                     o.id for o in self.broker.open_orders() if o.symbol == p.symbol and o.side == Side.SELL
                 ]
+                plan = p.plan or {}
+                target, stop = p.take_profit_price, p.stop_price
+                progress = None
+                if target and target > p.avg_cost:
+                    progress = (mark - p.avg_cost) / (target - p.avg_cost) * 100
+                mins_left = (p.deadline - now).total_seconds() / 60 if (p.deadline and now) else None
+                mins_close = (close - now).total_seconds() / 60 if (close and now) else None
+                rec = self.bot.universe.record_on(p.symbol, as_of)
+                held_fc = self.bot.held_forecasts.get(p.symbol)
+                cur = None
+                if held_fc and held_fc.forecast:
+                    cur = {
+                        "expected_net_return_pct": round(held_fc.forecast.expected_net_return_pct, 3),
+                        "p_positive": round(held_fc.forecast.p_positive, 3),
+                        "horizon_minutes": round(held_fc.forecast.horizon_minutes, 1),
+                        "calibrated": held_fc.forecast.calibrated,
+                        "label": held_fc.forecast.label,
+                    }
                 out.append(
                     {
                         "symbol": p.symbol,
@@ -550,13 +871,34 @@ class AppService:
                         "unrealized_pnl": round(p.unrealized(mark), 2),
                         "unrealized_pct": round((mark / p.avg_cost - 1) * 100, 3) if p.avg_cost else 0,
                         "strategy": p.strategy,
+                        "mode": p.mode,
                         "opened_at": p.opened_at.isoformat(),
                         "entry_reason": p.entry_reason,
-                        "stop_price": p.stop_price,
-                        "take_profit_price": p.take_profit_price,
+                        "stop_price": stop,
+                        "initial_stop_price": p.initial_stop_price,
+                        "breakeven_armed": p.breakeven_armed,
+                        "take_profit_price": target,
+                        "target_return_pct": round((target / p.avg_cost - 1) * 100, 3) if target else None,
                         "trailing_stop_pct": p.trailing_stop_pct,
                         "high_water_mark": round(p.high_water_mark, 4),
                         "max_hold_minutes": p.max_hold_minutes,
+                        "deadline": p.deadline.isoformat() if p.deadline else None,
+                        "minutes_left": None if mins_left is None else round(max(mins_left, 0.0), 1),
+                        "minutes_to_close": None if mins_close is None else round(max(mins_close, 0.0), 1),
+                        "progress_to_target_pct": None if progress is None else round(progress, 1),
+                        "stop_cushion_pct": round((mark - stop) / mark * 100, 3) if (stop and mark) else None,
+                        "expected_net_return_pct": p.entry_forecast.get("expected_net_return_pct"),
+                        "p_positive": p.entry_forecast.get("p_positive"),
+                        "p_target": plan.get("p_target"),
+                        "forecast_label": p.entry_forecast.get("label"),
+                        "forecast_calibrated": bool(p.entry_forecast.get("calibrated", False)),
+                        "plan_notes": plan.get("notes", []),
+                        "current_forecast": cur,
+                        "eligibility": rec.status.value,
+                        "eligibility_label": rec.status.label,
+                        "eligibility_flag": rec.status != EligibilityStatus.CONFIRMED_TRADABLE
+                        and not self.bot.universe.ignore,
+                        "closing": p.symbol in self.bot._manual_close,
                         "exit_order_ids": pending,
                     }
                 )
@@ -601,7 +943,121 @@ class AppService:
                 "config": self.settings.scanner.model_dump(mode="json"),
                 "results": [r.to_dict() for r in res],
                 "n_tradable": sum(1 for r in res if r.tradable),
+                "n_actionable": sum(1 for r in res if r.actionable),
             }
+
+    # ------------------------------------------------------------------ opportunities
+    def _row(self, o: Any) -> dict[str, Any]:
+        f, pl = o.forecast, o.plan
+        failed = next((g for g in o.gates if not g.passed), None)
+        return {
+            "symbol": o.symbol,
+            "name": o.name,
+            "price": round(o.price, 4),
+            "day_change_pct": o.scan.metrics.pct_change,
+            "eligibility": o.scan.eligibility_status.value,
+            "eligibility_label": o.scan.eligibility_status.label,
+            "eligibility_note": (
+                o.scan.eligibility.record.rejection_reason
+                if o.scan.eligibility and o.scan.eligibility.record.rejection_reason
+                else "; ".join(
+                    v.message for v in (o.scan.eligibility.violations if o.scan.eligibility else [])
+                )
+            ),
+            "actionable": o.actionable,
+            "research_only": o.research_only,
+            "held": o.held,
+            "score": round(o.score, 1),
+            "utility": round(o.utility, 3),
+            "expected_net_return_pct": None if f is None else round(f.expected_net_return_pct, 3),
+            "expected_return_pct": None if f is None else round(f.expected_return_pct, 3),
+            "uncertainty_pct": None if f is None else round(f.sigma_pct, 3),
+            "p_positive": None if f is None else round(f.p_positive, 3),
+            "downside_pct": None if f is None else round(f.downside_pct, 3),
+            "upside_pct": None if f is None else round(f.upside_pct, 3),
+            "target_price": None if pl is None else round(pl.target_price, 4),
+            "target_return_pct": None if pl is None else round(pl.target_return_pct, 3),
+            "p_target": None if pl is None else round(pl.p_target, 3),
+            "stop_price": None if pl is None else round(pl.stop_price, 4),
+            "horizon_minutes": round(o.horizon_minutes, 1),
+            "minutes_to_close": round(o.minutes_to_close, 1),
+            "calibrated": bool(f.calibrated) if f else False,
+            "forecast_label": f.label if f else None,
+            "blocked_by": None if failed is None else f"{failed.label}: {failed.detail}",
+            "summary": o.explanation.get("summary") if o.explanation else None,
+        }
+
+    def opportunities(self) -> dict[str, Any]:
+        """Everything the Opportunities page and the dashboard's Top-5 need, in one read."""
+        with self.lock:
+            ops = self.bot.opportunities
+            eligible = [o for o in ops if o.scan.opportunity_ok and not o.held]
+            ready = [o for o in eligible if o.actionable]
+            watching = [o for o in eligible if not o.actionable]
+            research = [o for o in ops if o.research_only]
+            scan = self.bot.latest_scan
+            unavailable = [
+                r
+                for r in scan
+                if r.eligibility_status == EligibilityStatus.CONFIRMED_UNAVAILABLE and r.basic_ok
+            ]
+            unavailable.sort(key=lambda r: -r.score)
+            waiting = next(
+                (
+                    n["message"]
+                    for n in reversed(self.bot.decision_log)
+                    if str(n["message"]).startswith("Waiting")
+                ),
+                None,
+            )
+            mode = self.settings.trading.mode
+            return {
+                "as_of": self.bot.last_tick.isoformat() if self.bot.last_tick else None,
+                "feed": self.feed(),
+                "mode": {"id": mode.value, "label": mode.label},
+                "forecaster": self.forecaster_info,
+                "eligibility_source": self.eligibility_source,
+                "eligibility_applied": not self.bot.universe.ignore,
+                "top": [self._row(o) for o in (ready + watching)[:5]],
+                "ready": [self._row(o) for o in ready],
+                "watching": [self._row(o) for o in watching[:50]],
+                "research": [self._row(o) for o in research[:50]],
+                "unavailable_skipped": [
+                    {
+                        "symbol": r.symbol,
+                        "name": r.name,
+                        "score": round(r.score, 1),
+                        "reason": r.eligibility.record.rejection_reason if r.eligibility else "",
+                    }
+                    for r in unavailable[:20]
+                ],
+                "counts": {
+                    "scanned": len(scan),
+                    "eligible": len(eligible),
+                    "ready": len(ready),
+                    "research": len(research),
+                    "unavailable_skipped": len(unavailable),
+                },
+                "waiting": waiting if not ready else None,
+                "note": (
+                    "Ranked by expected return after costs for the time left today - not by how much a stock "
+                    "has already gained. Forecasts are estimates"
+                    + (
+                        "."
+                        if self.forecaster_info.get("calibrated")
+                        else " and are NOT validated probabilities."
+                    )
+                ),
+            }
+
+    def opportunity(self, symbol: str) -> dict[str, Any]:
+        with self.lock:
+            for o in self.bot.opportunities:
+                if o.symbol == symbol.upper():
+                    d = o.to_dict()
+                    d["row"] = self._row(o)
+                    return d
+            raise ServiceError(f"{symbol.upper()} is not in the current ranking")
 
     def stock(self, symbol: str) -> dict[str, Any]:
         symbol = symbol.upper()
@@ -612,10 +1068,18 @@ class AppService:
             ctx = self.source.context_for(symbol, now)
             if ctx is None:
                 raise ServiceError(f"{symbol} is not in the current universe")
-            scanner = Scanner(self.settings.scanner)
-            scan = scanner.scan_one(ctx)
+            scanner = Scanner(self.settings.scanner, self.settings.game)
+            as_of = self._elig_as_of()
+            scan = scanner.scan_one(ctx, self.bot.universe, as_of)
             mins = (now - self.runner.schedule.open).total_seconds() / 60
-            inp = SignalInput(ctx, scan.metrics, scan, mins)
+            opp = self.bot.ranker.evaluate(
+                ctx,
+                scan,
+                self.bot.market,
+                self.settings.profile_for(),
+                self.settings.effective_costs(),
+            )
+            inp = SignalInput(ctx, scan.metrics, scan, mins, opportunity=opp)
             evs = [
                 build_strategy(sid, self.settings.strategies.params.get(sid)).evaluate_entry(inp).to_dict()
                 for sid in STRATEGY_CLASSES
@@ -640,11 +1104,155 @@ class AppService:
                 ],
                 "open_time": int(self.runner.schedule.open.timestamp()),
                 "scan": scan.to_dict(),
+                "opportunity": opp.to_dict(),
                 "evaluations": evs,
                 "halted": ctx.halted,
                 "position": next((p for p in self.positions() if p["symbol"] == symbol), None),
                 "held": pos is not None,
             }
+
+    # ------------------------------------------------------------------ activity
+    def activity(self, limit: int = 100) -> list[dict[str, Any]]:
+        """The bot's own words, newest first: what it saw, bought, sold and why."""
+        out = []
+        for d in self.store.recent_decisions(min(limit, 500)):
+            ts = d["ts"]
+            iso = ts.isoformat() if hasattr(ts, "isoformat") else str(ts)
+            details = d.get("details") or {}
+            out.append(
+                {
+                    "ts": iso,
+                    "ts_chicago": to_chicago(ts).strftime("%H:%M") if hasattr(ts, "isoformat") else "",
+                    "kind": d["kind"],
+                    "symbol": d["symbol"],
+                    "message": d["message"],
+                    "exit_category": details.get("exit_category"),
+                }
+            )
+        return out
+
+    # ------------------------------------------------------------------ eligibility
+    def eligibility_summary(self) -> dict[str, Any]:
+        with self.lock:
+            u = self.bot.universe
+            counts = {s.value: 0 for s in EligibilityStatus}
+            for t in u.tickers():
+                counts[u.record_on(t, None).status.value] += 1
+            return {
+                "applied": not u.ignore,
+                "n_tickers": len(u),
+                "counts": counts,
+                "source": self.eligibility_source,
+                "rules": self.settings.game.model_dump(mode="json"),
+                "verifier": {
+                    "name": MarketWatchVerifier.name,
+                    "available": False,
+                    "message": "Automatic verification against MarketWatch is not implemented - it needs your "
+                    "permission and your own logged-in browser on your computer. Maintain the list here or by CSV.",
+                },
+                "note": "A stock is only ever bought if it is marked Confirmed tradable here. Being listed on "
+                "NYSE/Nasdaq or having market data does not make it available in your game.",
+            }
+
+    def eligibility_list(self, q: str = "", status: str = "all", limit: int = 500) -> list[dict[str, Any]]:
+        with self.lock:
+            u = self.bot.universe
+            rows = []
+            qq = q.strip().upper()
+            for t in u.tickers():
+                rec = u.record_on(t, None)
+                if status != "all" and rec.status.value != status:
+                    continue
+                if qq and qq not in t and qq not in rec.name.upper():
+                    continue
+                d = rec.to_dict()
+                d["n_history"] = len(u.history(t))
+                rows.append(d)
+            return rows[:limit]
+
+    def eligibility_history(self, ticker: str) -> list[dict[str, Any]]:
+        with self.lock:
+            return [r.to_dict() for r in self.bot.universe.history(ticker.upper())]
+
+    def eligibility_set(
+        self,
+        ticker: str,
+        status: str,
+        *,
+        name: str = "",
+        exchange: str = "",
+        rejection_reason: str = "",
+        restrictions: str = "",
+        effective_from: date | None = None,
+    ) -> dict[str, Any]:
+        ticker = ticker.strip().upper()
+        if not ticker or not ticker.replace(".", "").replace("-", "").isalnum() or len(ticker) > 10:
+            raise ServiceError("Enter a valid ticker symbol.")
+        try:
+            st = EligibilityStatus(status)
+        except ValueError as exc:
+            raise ServiceError(
+                "Status must be confirmed_tradable, confirmed_unavailable or unverified."
+            ) from exc
+        today = utcnow().astimezone(ET).date()
+        # A manual statement is dated: it is true from `effective_from` (default today) onward, so replays of
+        # earlier dates are never rewritten by what you know today.
+        rec = EligibilityRecord(
+            ticker=ticker,
+            status=st,
+            effective_from=effective_from or today,
+            verified_on=today if st != EligibilityStatus.UNVERIFIED else None,
+            name=name,
+            exchange=exchange,
+            rejection_reason=rejection_reason if st == EligibilityStatus.CONFIRMED_UNAVAILABLE else "",
+            restrictions=restrictions,
+            source="manual",
+        )
+        with self.lock:
+            self.store.eligibility_upsert([rec])
+            self.refresh_universe()
+            return self.bot.universe.record_on(ticker, None).to_dict()
+
+    def eligibility_delete(self, ticker: str) -> int:
+        with self.lock:
+            n = self.store.eligibility_delete(ticker)
+            self.refresh_universe()
+            return n
+
+    def eligibility_clear(self) -> None:
+        with self.lock:
+            self.store.eligibility_clear()
+            self.store.set_kv("eligibility_seeded", True)  # an emptied list stays empty
+            self.refresh_universe()
+
+    def eligibility_import_csv(self, text: str, dry_run: bool = False) -> dict[str, Any]:
+        res = parse_csv(text, today=utcnow().astimezone(ET).date())
+        out: dict[str, Any] = {
+            "n_rows": len(res.records),
+            "errors": res.errors,
+            "applied": False,
+            "preview": [r.to_dict() for r in res.records[:20]],
+        }
+        if res.errors and not res.records:
+            raise ServiceError("Nothing imported: " + "; ".join(res.errors[:5]))
+        if not dry_run:
+            with self.lock:
+                self.store.eligibility_upsert(res.records)
+                self.store.set_kv("eligibility_seeded", True)
+                self.refresh_universe()
+            out["applied"] = True
+        return out
+
+    def eligibility_export_csv(self) -> str:
+        return export_csv(self.store.eligibility_all())
+
+    def eligibility_seed_demo(self) -> int:
+        with self.lock:
+            n = self.store.eligibility_upsert(demo_seed())
+            self.store.set_kv("eligibility_seeded", True)
+            self.refresh_universe()
+            self.eligibility_source = "demo list (made-up, for demo mode)"
+            return n
 
     def manual_order(
         self,
@@ -684,6 +1292,30 @@ class AppService:
 
     def equity_history(self) -> list[dict[str, Any]]:
         return self.store.equity_history()
+
+    def equity_series(self, range_: str = "1D") -> dict[str, Any]:
+        """Equity curve for 1D / 1W / 1M / ALL, thinned to a chart-friendly size."""
+        rows = self.store.equity_history(limit=50_000)
+        n_days = {"1D": 1, "1W": 5, "1M": 22, "ALL": 10_000}.get(range_.upper())
+        if n_days is None:
+            raise ServiceError("range must be 1D, 1W, 1M or ALL")
+        dates = sorted({r["date"] for r in rows})[-n_days:]
+        sel = [r for r in rows if r["date"] in dates]
+        stride = max(1, len(sel) // 400)
+        pts = sel[::stride]
+        if sel and pts[-1] is not sel[-1]:
+            pts.append(sel[-1])
+        start = float(pts[0]["equity"]) if pts else self.broker.starting_cash
+        end = float(pts[-1]["equity"]) if pts else self.broker.equity()
+        return {
+            "range": range_.upper(),
+            "points": pts,
+            "start_equity": start,
+            "end_equity": end,
+            "change": round(end - start, 2),
+            "change_pct": round((end / start - 1) * 100, 3) if start else 0.0,
+            "feed": self.feed(),
+        }
 
     def decisions(self, limit: int = 200) -> list[dict[str, Any]]:
         return self.store.recent_decisions(limit)
@@ -771,6 +1403,39 @@ class AppService:
         except (DatasetError, FileNotFoundError, OSError) as exc:
             raise ServiceError(f"dataset {dataset!r} unavailable: {exc}") from exc
 
+    def _universe_for_backtest(self, provider: MarketDataProvider) -> EligibilityUniverse | None:
+        """Datasets that ship their own eligibility history use it; otherwise the user's own list (which is then
+        treated as point-in-time, so a list typed today never claims to describe the past)."""
+        if callable(getattr(provider, "eligibility_records", None)):
+            return None
+        u = EligibilityUniverse(self.store.eligibility_all())
+        return u if len(u) else None
+
+    def _submit_job(self, job: BacktestJob, work: Any) -> str:
+        self.jobs[job.id] = job
+
+        def runner() -> None:
+            job.status = "running"
+            try:
+                work(job)
+                if job.status == "running":
+                    job.status = "cancelled" if job.cancel else "done"
+                job.progress = 1.0
+            except Exception as exc:
+                log.exception("background job failed", extra={"kind": job.kind})
+                job.status = "error"
+                job.error = f"{type(exc).__name__}: {exc}"
+
+        self._pool.submit(runner)
+        return job.id
+
+    def _demo_dates(self, n: int = 5) -> list[date]:
+        d = previous_trading_day(utcnow().astimezone(ET).date())
+        dates = [d]
+        while len(dates) < n:
+            dates.append(previous_trading_day(dates[-1]))
+        return sorted(dates)
+
     def start_backtest(
         self, config: BacktestConfig, dataset: str | None, compare: list[str] | None = None
     ) -> str:
@@ -779,46 +1444,98 @@ class AppService:
             if sid not in STRATEGY_CLASSES:
                 raise ServiceError(f"unknown strategy {sid!r}")
         if dataset in (None, "", "demo") and not config.dates:
-            n = 5
-            d = previous_trading_day(utcnow().astimezone(ET).date())
-            dates = [d]
-            while len(dates) < n:
-                dates.append(previous_trading_day(dates[-1]))
-            config = config.model_copy(update={"dates": sorted(dates)})
+            config = config.model_copy(update={"dates": self._demo_dates()})
+        universe = self._universe_for_backtest(provider)
         job = BacktestJob(id=uuid.uuid4().hex[:10])
-        self.jobs[job.id] = job
 
-        def work() -> None:
-            job.status = "running"
-            try:
+        def work(j: BacktestJob) -> None:
+            def prog(i: int, n: int, label: str) -> None:
+                j.progress = i / max(n, 1)
+                j.message = label
 
-                def prog(i: int, n: int, label: str) -> None:
-                    job.progress = i / max(n, 1)
-                    job.message = label
+            if compare:
+                results = compare_strategies(provider, config, compare, progress=prog)
+            else:
+                results = [
+                    run_backtest(provider, config, universe=universe, progress=prog, cancel=lambda: j.cancel)
+                ]
+            for r in results:
+                self._bt_cache[r.id] = r
+                self.store.save_backtest(
+                    r.id,
+                    r.config.get("name", "backtest"),
+                    r.config,
+                    r.summary,
+                    r.to_dict(include_trades=True),
+                )
+                j.result_ids.append(r.id)
 
-                if compare:
-                    results = compare_strategies(provider, config, compare, progress=prog)
-                else:
-                    results = [run_backtest(provider, config, progress=prog, cancel=lambda: job.cancel)]
-                for r in results:
-                    self._bt_cache[r.id] = r
-                    self.store.save_backtest(
-                        r.id,
-                        r.config.get("name", "backtest"),
-                        r.config,
-                        r.summary,
-                        r.to_dict(include_trades=True),
-                    )
-                    job.result_ids.append(r.id)
-                job.status = "cancelled" if job.cancel else "done"
-                job.progress = 1.0
-            except Exception as exc:
-                log.exception("backtest failed")
-                job.status = "error"
-                job.error = f"{type(exc).__name__}: {exc}"
+        return self._submit_job(job, work)
 
-        self._pool.submit(work)
-        return job.id
+    def start_compare_modes(self, config: BacktestConfig, dataset: str | None) -> str:
+        """Maximum Expected Return vs Aggressive Upside (+ baselines) on identical data."""
+        provider = self._provider_for_backtest(dataset)
+        if dataset in (None, "", "demo") and not config.dates:
+            config = config.model_copy(update={"dates": self._demo_dates()})
+        universe = self._universe_for_backtest(provider)
+        job = BacktestJob(id=uuid.uuid4().hex[:10], kind="compare_modes")
+
+        def work(j: BacktestJob) -> None:
+            def prog(i: int, n: int, label: str) -> None:
+                j.progress = i / max(n, 1)
+                j.message = label
+
+            res = compare_modes(provider, config, universe=universe, progress=prog)
+            res["id"] = j.id
+            res["created_at"] = utcnow().isoformat()
+            res["dataset"] = dataset or "demo"
+            j.payload = res
+            ids = list(self.store.get_kv("compare_ids", []))
+            self.store.set_kv(f"compare:{j.id}", res)
+            self.store.set_kv("compare_ids", [*ids, j.id][-5:])
+
+        return self._submit_job(job, work)
+
+    def start_model_check(self, dataset: str | None, max_days: int | None = None) -> str:
+        """Walk-forward comparison of the forecasters; saves the trained model (never labelled calibrated unless
+        the out-of-sample check passed)."""
+        if dataset in (None, "", "demo"):
+            raise ServiceError("Pick a replayable dataset (not the live demo market) for a model check.")
+        provider = self._provider_for_backtest(dataset)
+        universe = self._universe_for_backtest(provider)
+        if universe is None and callable(getattr(provider, "eligibility_records", None)):
+            universe = EligibilityUniverse(list(provider.eligibility_records()))  # type: ignore[attr-defined]
+        job = BacktestJob(id=uuid.uuid4().hex[:10], kind="model_check")
+        settings = self.settings.model_copy(deep=True)
+
+        def work(j: BacktestJob) -> None:
+            def prog(i: int, n: int, label: str) -> None:
+                j.progress = i / max(n, 1)
+                j.message = label
+
+            report, model = evaluate_models(provider, settings, universe, max_days=max_days, progress=prog)
+            report["id"] = j.id
+            report["created_at"] = utcnow().isoformat()
+            report["dataset"] = dataset
+            if model is not None:
+                self.store.set_kv("model:ridge", model.to_dict())
+                report["saved_model"] = {
+                    "name": model.name,
+                    "calibrated": model.calibrated,
+                    "trained_through": model.trained_through,
+                }
+            j.payload = report
+            self.store.set_kv("model_check:latest", report)
+
+        return self._submit_job(job, work)
+
+    def strategy_lab_latest(self) -> dict[str, Any]:
+        ids = self.store.get_kv("compare_ids", [])
+        return {
+            "comparison": self.store.get_kv(f"compare:{ids[-1]}") if ids else None,
+            "model_check": self.store.get_kv("model_check:latest"),
+            "forecaster": self.forecaster_info,
+        }
 
     def job(self, job_id: str) -> dict[str, Any]:
         j = self.jobs.get(job_id)
@@ -826,11 +1543,13 @@ class AppService:
             raise ServiceError("unknown job")
         return {
             "id": j.id,
+            "kind": j.kind,
             "status": j.status,
             "progress": j.progress,
             "message": j.message,
             "result_ids": j.result_ids,
             "error": j.error,
+            "payload": j.payload,
         }
 
     def backtest_csv(self, bt_id: str, kind: str) -> str:

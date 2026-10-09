@@ -196,6 +196,15 @@ class Position:
     commissions: float = 0.0
     pending_exit_reason: str = ""
     reference: dict[str, float] = field(default_factory=dict)
+    # Plan made at entry (expected-opportunity trades): kept so the position is managed by the rules it was
+    # opened with, whatever settings change later.
+    deadline: datetime | None = None
+    plan: dict[str, Any] = field(default_factory=dict)
+    mode: str = ""
+    entry_forecast: dict[str, Any] = field(default_factory=dict)
+    initial_stop_price: float | None = None
+    breakeven_armed: bool = False
+    bad_forecasts: int = 0  # consecutive updated forecasts below the hold threshold
 
     def market_value(self, mark: float) -> float:
         return self.quantity * mark
@@ -224,6 +233,14 @@ class Trade:
     entry_reason: str
     exit_reason: str
     session_date: str = ""
+    # What the model said when the trade was opened (predictive strategy only; None/"" otherwise).
+    mode: str = ""
+    predicted_net_return_pct: float | None = None
+    predicted_p_positive: float | None = None
+    predicted_p_target: float | None = None
+    planned_target_price: float | None = None
+    planned_stop_price: float | None = None
+    forecast_calibrated: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -243,6 +260,13 @@ class Trade:
             "entry_reason": self.entry_reason,
             "exit_reason": self.exit_reason,
             "session_date": self.session_date,
+            "mode": self.mode,
+            "predicted_net_return_pct": self.predicted_net_return_pct,
+            "predicted_p_positive": self.predicted_p_positive,
+            "predicted_p_target": self.predicted_p_target,
+            "planned_target_price": self.planned_target_price,
+            "planned_stop_price": self.planned_stop_price,
+            "forecast_calibrated": self.forecast_calibrated,
         }
 
 
@@ -261,6 +285,9 @@ class StockMeta:
     float_shares: float | None = None
     # Typical quoted spread in basis points. Only synthetic/live-quote providers set this.
     typical_spread_bps: float | None = None
+    # Optional catalyst/news known BEFORE the decision (empty = none known / feed has no news).
+    catalyst: str = ""
+    catalyst_sentiment: float | None = None  # -1 (bad) .. +1 (good)
 
 
 @dataclass(slots=True)

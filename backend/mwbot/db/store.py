@@ -6,8 +6,8 @@ import json
 import logging
 from collections.abc import Iterator
 from contextlib import contextmanager
-from dataclasses import asdict
-from datetime import UTC, datetime
+from dataclasses import asdict, fields
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -21,6 +21,7 @@ from mwbot.db.models import (
     Base,
     DailyReportRow,
     DecisionRow,
+    EligibilityRow,
     EquityRow,
     FillRow,
     KeyValueRow,
@@ -38,6 +39,8 @@ from mwbot.domain import (
     TimeInForce,
     Trade,
 )
+from mwbot.eligibility.models import EligibilityRecord, EligibilityStatus
+from mwbot.eligibility.universe import EligibilityUniverse
 from mwbot.trading.broker import PaperBroker
 
 log = logging.getLogger(__name__)
@@ -74,13 +77,16 @@ def _dt(s: str | None) -> datetime | None:
 def _position_to_json(p: Position) -> dict[str, Any]:
     d = asdict(p)
     d["opened_at"] = p.opened_at.isoformat()
-    return d
+    d["deadline"] = p.deadline.isoformat() if p.deadline else None
+    return json.loads(json.dumps(d, default=str))
 
 
 def _position_from_json(d: dict[str, Any]) -> Position:
     d = dict(d)
     d["opened_at"] = datetime.fromisoformat(d["opened_at"])
-    return Position(**d)
+    d["deadline"] = datetime.fromisoformat(d["deadline"]) if d.get("deadline") else None
+    known = {f.name for f in fields(Position)}
+    return Position(**{k: v for k, v in d.items() if k in known})
 
 
 def _trade_to_json(t: Trade) -> dict[str, Any]:
@@ -94,7 +100,8 @@ def _trade_from_json(d: dict[str, Any]) -> Trade:
     d = dict(d)
     d["entry_time"] = datetime.fromisoformat(d["entry_time"])
     d["exit_time"] = datetime.fromisoformat(d["exit_time"])
-    return Trade(**d)
+    known = {f.name for f in fields(Trade)}
+    return Trade(**{k: v for k, v in d.items() if k in known})
 
 
 class SqlStore:
@@ -402,3 +409,70 @@ class SqlStore:
                 "summary": r.summary,
                 "result": r.result,
             }
+
+    # ------------------------------------------------------------------ eligibility history
+    def eligibility_upsert(self, records: list[EligibilityRecord]) -> int:
+        n = 0
+        with self.session() as s:
+            for rec in records:
+                row = s.scalars(
+                    select(EligibilityRow).where(
+                        EligibilityRow.ticker == rec.ticker.upper(),
+                        EligibilityRow.effective_from == rec.effective_from.isoformat(),
+                    )
+                ).first()
+                vals = dict(
+                    status=str(rec.status),
+                    verified_on=rec.verified_on.isoformat() if rec.verified_on else None,
+                    name=rec.name,
+                    exchange=rec.exchange,
+                    security_type=rec.security_type,
+                    rejection_reason=rec.rejection_reason,
+                    restrictions=rec.restrictions,
+                    source=rec.source,
+                )
+                if row is None:
+                    s.add(
+                        EligibilityRow(
+                            ticker=rec.ticker.upper(), effective_from=rec.effective_from.isoformat(), **vals
+                        )
+                    )
+                else:
+                    for k, v in vals.items():
+                        setattr(row, k, v)
+                n += 1
+        return n
+
+    def eligibility_all(self) -> list[EligibilityRecord]:
+        with self.session() as s:
+            rows = s.scalars(
+                select(EligibilityRow).order_by(EligibilityRow.ticker, EligibilityRow.effective_from)
+            )
+            return [_rec_from_row(r) for r in rows]
+
+    def eligibility_delete(self, ticker: str) -> int:
+        with self.session() as s:
+            res = s.execute(delete(EligibilityRow).where(EligibilityRow.ticker == ticker.upper()))
+            return int(res.rowcount or 0)  # type: ignore[attr-defined]
+
+    def eligibility_clear(self) -> None:
+        with self.session() as s:
+            s.execute(delete(EligibilityRow))
+
+    def eligibility_universe(self) -> EligibilityUniverse:
+        return EligibilityUniverse(self.eligibility_all())
+
+
+def _rec_from_row(r: EligibilityRow) -> EligibilityRecord:
+    return EligibilityRecord(
+        ticker=r.ticker,
+        status=EligibilityStatus(r.status),
+        effective_from=date.fromisoformat(r.effective_from),
+        verified_on=date.fromisoformat(r.verified_on) if r.verified_on else None,
+        name=r.name,
+        exchange=r.exchange,
+        security_type=r.security_type,
+        rejection_reason=r.rejection_reason,
+        restrictions=r.restrictions,
+        source=r.source,
+    )

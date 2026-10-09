@@ -560,8 +560,98 @@ class CustomWeighted(Strategy):
         return None
 
 
+# --------------------------------------------------------------------------- P: expected opportunity (default)
+
+
+class ExpectedOpportunityParams(BaseModel):
+    min_score: float = Field(
+        0.0,
+        ge=0,
+        le=100,
+        description="Extra floor on the 0-100 opportunity score (0 = use the mode's gates only)",
+    )
+
+
+class ExpectedOpportunity(Strategy):
+    """The default, predictive strategy. It does not look at who gained the most: it enters the eligible stock
+    with the best risk-adjusted EXPECTED net return over the time left today, with a per-trade target/stop.
+    All thresholds come from the active mode profile (Maximum Expected Return / Aggressive Upside)."""
+
+    id = "expected_opportunity"
+    name = "Expected Opportunity (recommended)"
+    summary = "Buy the eligible stock with the best expected net return over the remaining session; individual target, stop and deadline."
+    entry_rules: ClassVar[list[str]] = [
+        "Stock is confirmed tradable in your MarketWatch game and passes the game's rules (never unverified)",
+        "Forecast expected return after modelled costs clears the mode's threshold",
+        "Estimated chance of a positive net return and of reaching the target clear the mode's thresholds",
+        "Reward-to-risk, volatility, cost and time-to-close checks pass",
+    ]
+    exit_rules: ClassVar[list[str]] = [
+        "Profit target reached (sold early, not held to the close)",
+        "Stop-loss / trailing stop / breakeven stop hit",
+        "Updated forecast deteriorates for several checks in a row (after a minimum hold)",
+        "Better opportunity found and worth the switching cost (rotation)",
+        "Planned deadline or end-of-day liquidation",
+    ]
+    risk_rules: ClassVar[list[str]] = [
+        "Position size from the stop distance, mode risk limits and game limits"
+    ]
+    ParamsModel = ExpectedOpportunityParams
+    params: ExpectedOpportunityParams
+
+    def evaluate_entry(self, inp: SignalInput) -> Evaluation:
+        o = inp.opportunity
+        conds: list[Condition] = [
+            Condition(
+                "Confirmed tradable in your game",
+                bool(o and o.scan.opportunity_ok),
+                o.scan.eligibility_status.label if o and o.scan.eligibility else "eligibility not evaluated",
+            )
+        ]
+        if o is None or o.forecast is None or o.plan is None:
+            conds.append(Condition("Forecast available", False, "not enough data yet"))
+            return Evaluation(self.id, inp.ctx.symbol, False, 0.0, conds)
+        conds += [Condition(g.label, g.passed, g.detail) for g in o.gates]
+        conds.append(
+            Condition(
+                "Opportunity score",
+                o.score >= self.params.min_score,
+                f"{o.score:.0f} (need >= {self.params.min_score:g})",
+            )
+        )
+        plan, fc = o.plan, o.forecast
+        ev = Evaluation(
+            strategy=self.id,
+            symbol=o.symbol,
+            passed=all(c.passed for c in conds),
+            strength=max(0.0, min(1.0, o.score / 100)),
+            conditions=conds,
+            stop_loss_pct=plan.stop_pct,
+            take_profit_pct=plan.target_return_pct,
+            trailing_stop_pct=plan.trailing_pct,
+            max_hold_minutes=max(1, int(plan.max_hold_minutes)),
+            plan=plan.to_dict(),
+            forecast=fc.to_dict(),
+        )
+        ev.reference["target_price"] = plan.target_price
+        return ev
+
+    def evaluate_exit(self, inp: SignalInput, position: Position) -> ExitDecision | None:
+        # Forecast-based exits need the bot's hysteresis/min-hold bookkeeping, so the bot owns them
+        # (TradingBot._forecast_exit). Hard exits (target, stop, trailing, deadline) are also the bot's.
+        return None
+
+
 STRATEGY_CLASSES: dict[str, type[Strategy]] = {
-    c.id: c for c in (OpeningMomentum, GapContinuation, MomentumBreakout, VolumeSurge, CustomWeighted)
+    c.id: c
+    for c in (
+        ExpectedOpportunity,
+        OpeningMomentum,
+        GapContinuation,
+        MomentumBreakout,
+        VolumeSurge,
+        CustomWeighted,
+    )
 }
 
 

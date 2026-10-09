@@ -19,7 +19,7 @@ from mwbot import __version__
 from mwbot.backtest.engine import BacktestConfig
 from mwbot.config import PRESET_FILTERS, EnvSettings
 from mwbot.logging_setup import configure_logging
-from mwbot.service import AppService, ServiceError
+from mwbot.service import AppService, ServiceError, SettingsError
 
 log = logging.getLogger(__name__)
 
@@ -43,9 +43,58 @@ class OrderIn(BaseModel):
     client_order_id: str | None = None
 
 
+class ChangesIn(BaseModel):
+    changes: dict[str, Any]
+
+
+class ResetIn(BaseModel):
+    category: str | None = None
+
+
+class ModeIn(BaseModel):
+    mode: str
+
+
+class ImportIn(BaseModel):
+    payload: dict[str, Any]
+    apply: bool = True
+
+
+class EligibilityIn(BaseModel):
+    status: str
+    name: str = ""
+    exchange: str = ""
+    rejection_reason: str = ""
+    restrictions: str = ""
+    effective_from: dt.date | None = None
+
+
+class CsvIn(BaseModel):
+    csv: str = Field(max_length=5_000_000)
+    dry_run: bool = False
+
+
+class CompareIn(BaseModel):
+    dataset: str | None = None
+    start: dt.date | None = None
+    end: dt.date | None = None
+    dates: list[dt.date] | None = None
+    forecaster: str = Field("heuristic", pattern="^(heuristic|statistical)$")
+    eligibility: str = Field("point_in_time", pattern="^(point_in_time|none)$")
+    oos_fraction: float = Field(0.0, ge=0.0, le=0.8)
+
+
+class ModelCheckIn(BaseModel):
+    dataset: str
+    max_days: int | None = Field(None, ge=4, le=500)
+
+
 class BacktestRequest(BaseModel):
     name: str = "backtest"
     dataset: str | None = None
+    mode: str = "max_expected_return"
+    eligibility: str = Field("point_in_time", pattern="^(point_in_time|none)$")
+    forecaster: str = Field("heuristic", pattern="^(heuristic|statistical)$")
     strategies: list[str] = Field(min_length=1)
     strategy_params: dict[str, dict[str, Any]] = Field(default_factory=dict)
     compare: bool = False
@@ -85,6 +134,10 @@ def create_app(service: AppService | None = None, env: EnvSettings | None = None
     def svc(request: Request) -> AppService:
         s: AppService = request.app.state.service
         return s
+
+    @app.exception_handler(SettingsError)
+    async def _settings_error(_: Request, exc: SettingsError) -> JSONResponse:
+        return JSONResponse({"detail": str(exc), "errors": exc.errors}, status_code=400)
 
     @app.exception_handler(ServiceError)
     async def _service_error(_: Request, exc: ServiceError) -> JSONResponse:
@@ -146,8 +199,80 @@ def create_app(service: AppService | None = None, env: EnvSettings | None = None
         return svc(request).trades()
 
     @app.get("/api/portfolio/equity")
-    def equity(request: Request) -> list[dict[str, Any]]:
+    def equity(request: Request, range: str | None = None) -> Any:  # noqa: A002 - query name is part of the API
+        if range:
+            return svc(request).equity_series(range)
         return svc(request).equity_history()
+
+    @app.post("/api/positions/{symbol}/close")
+    def close_position(request: Request, symbol: str) -> dict[str, Any]:
+        return svc(request).close_position(symbol)
+
+    @app.get("/api/activity")
+    def activity(request: Request, limit: int = 100) -> list[dict[str, Any]]:
+        return svc(request).activity(limit)
+
+    # ---- opportunities
+    @app.get("/api/opportunities")
+    def opportunities(request: Request) -> dict[str, Any]:
+        return svc(request).opportunities()
+
+    @app.get("/api/opportunities/{symbol}")
+    def opportunity(request: Request, symbol: str) -> dict[str, Any]:
+        return svc(request).opportunity(symbol)
+
+    # ---- MarketWatch eligibility
+    @app.get("/api/eligibility")
+    def eligibility_list(
+        request: Request, q: str = "", status: str = "all", limit: int = 500
+    ) -> dict[str, Any]:
+        s = svc(request)
+        return {"summary": s.eligibility_summary(), "rows": s.eligibility_list(q, status, min(limit, 2000))}
+
+    @app.get("/api/eligibility/summary")
+    def eligibility_summary(request: Request) -> dict[str, Any]:
+        return svc(request).eligibility_summary()
+
+    @app.get("/api/eligibility/export.csv")
+    def eligibility_export(request: Request) -> PlainTextResponse:
+        return PlainTextResponse(
+            svc(request).eligibility_export_csv(),
+            media_type="text/csv",
+            headers={"Content-Disposition": 'attachment; filename="marketwatch_eligibility.csv"'},
+        )
+
+    @app.post("/api/eligibility/import")
+    def eligibility_import(request: Request, body: CsvIn) -> dict[str, Any]:
+        return svc(request).eligibility_import_csv(body.csv, body.dry_run)
+
+    @app.post("/api/eligibility/seed-demo")
+    def eligibility_seed(request: Request) -> dict[str, int]:
+        return {"added": svc(request).eligibility_seed_demo()}
+
+    @app.delete("/api/eligibility")
+    def eligibility_clear(request: Request) -> dict[str, str]:
+        svc(request).eligibility_clear()
+        return {"status": "cleared"}
+
+    @app.get("/api/eligibility/{ticker}/history")
+    def eligibility_history(request: Request, ticker: str) -> list[dict[str, Any]]:
+        return svc(request).eligibility_history(ticker)
+
+    @app.put("/api/eligibility/{ticker}")
+    def eligibility_set(request: Request, ticker: str, body: EligibilityIn) -> dict[str, Any]:
+        return svc(request).eligibility_set(
+            ticker,
+            body.status,
+            name=body.name,
+            exchange=body.exchange,
+            rejection_reason=body.rejection_reason,
+            restrictions=body.restrictions,
+            effective_from=body.effective_from,
+        )
+
+    @app.delete("/api/eligibility/{ticker}")
+    def eligibility_delete(request: Request, ticker: str) -> dict[str, int]:
+        return {"deleted": svc(request).eligibility_delete(ticker)}
 
     @app.get("/api/performance")
     def performance(request: Request) -> dict[str, Any]:
@@ -216,6 +341,70 @@ def create_app(service: AppService | None = None, env: EnvSettings | None = None
     def put_settings(request: Request, patch: dict[str, Any]) -> dict[str, Any]:
         return svc(request).update_settings(patch).model_dump(mode="json")
 
+    @app.get("/api/settings/schema")
+    def settings_schema(request: Request) -> dict[str, Any]:
+        return svc(request).settings_schema()
+
+    @app.post("/api/settings/changes")
+    def settings_changes(request: Request, body: ChangesIn) -> dict[str, Any]:
+        return svc(request).update_changes(body.changes)
+
+    @app.post("/api/settings/preview")
+    def settings_preview(request: Request, body: ChangesIn) -> dict[str, Any]:
+        return svc(request).preview_changes(body.changes)
+
+    @app.post("/api/settings/reset")
+    def settings_reset(request: Request, body: ResetIn | None = None) -> dict[str, Any]:
+        return svc(request).reset_settings((body or ResetIn()).category)
+
+    @app.get("/api/settings/export")
+    def settings_export(request: Request) -> JSONResponse:
+        return JSONResponse(
+            svc(request).export_settings(),
+            headers={"Content-Disposition": 'attachment; filename="marketwatchbot_settings.json"'},
+        )
+
+    @app.post("/api/settings/import")
+    def settings_import(request: Request, body: ImportIn) -> dict[str, Any]:
+        return svc(request).import_settings(body.payload, body.apply)
+
+    @app.post("/api/mode")
+    def set_mode(request: Request, body: ModeIn) -> dict[str, Any]:
+        return svc(request).set_mode(body.mode)
+
+    # ---- strategy lab
+    @app.get("/api/strategy-lab/latest")
+    def strategy_lab_latest(request: Request) -> dict[str, Any]:
+        return svc(request).strategy_lab_latest()
+
+    @app.post("/api/compare-modes")
+    def compare_modes_route(request: Request, body: CompareIn) -> dict[str, str]:
+        s = svc(request)
+        cfg = BacktestConfig(
+            name="Mode comparison",
+            dates=body.dates,
+            start=body.start,
+            end=body.end,
+            initial_capital=s.settings.risk.starting_capital,
+            costs=s.settings.effective_costs(),
+            scanner=s.settings.scanner,
+            game=s.settings.game.model_copy(
+                update={
+                    "eligibility_mode": "point_in_time"
+                    if body.eligibility == "point_in_time"
+                    else "current_list"
+                }
+            ),
+            eligibility=body.eligibility,
+            forecaster=body.forecaster,
+            oos_fraction=body.oos_fraction,
+        )
+        return {"job_id": s.start_compare_modes(cfg, body.dataset)}
+
+    @app.post("/api/model-check")
+    def model_check(request: Request, body: ModelCheckIn) -> dict[str, str]:
+        return {"job_id": svc(request).start_model_check(body.dataset, body.max_days)}
+
     # ---- backtests
     @app.get("/api/datasets")
     def datasets(request: Request) -> list[dict[str, Any]]:
@@ -224,17 +413,32 @@ def create_app(service: AppService | None = None, env: EnvSettings | None = None
     @app.post("/api/backtests")
     def run_backtest(request: Request, body: BacktestRequest) -> dict[str, str]:
         s = svc(request)
-        risk = s.settings.risk.model_copy(update=body.risk)
-        costs = s.settings.costs.model_copy(update=body.costs)
+        costs = s.settings.effective_costs().model_copy(update=body.costs)
+        try:
+            from mwbot.config import TradingMode
+
+            mode = TradingMode(body.mode)
+        except ValueError as exc:
+            raise ServiceError("unknown trading mode") from exc
         cfg = BacktestConfig(
             name=body.name,
+            mode=mode,
+            eligibility=body.eligibility,
+            forecaster=body.forecaster,
+            game=s.settings.game.model_copy(
+                update={
+                    "eligibility_mode": "point_in_time"
+                    if body.eligibility == "point_in_time"
+                    else "current_list"
+                }
+            ),
             strategies=body.strategies,
             strategy_params=body.strategy_params,
             dates=body.dates,
             start=body.start,
             end=body.end,
             initial_capital=body.initial_capital,
-            risk=risk,
+            risk=s.settings.risk.model_copy(update=body.risk) if body.risk else None,
             costs=costs,
             scanner=s.settings.scanner,
             oos_fraction=body.oos_fraction,

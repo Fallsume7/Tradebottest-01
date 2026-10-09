@@ -86,7 +86,7 @@ def test_schedule_times_are_user_configurable_and_validated(svc):
     assert isinstance(svc.settings.schedule, ScheduleConfig)
 
 
-def test_scanner_and_risk_edits_are_allowed_live_but_capital_and_costs_are_not(svc):
+def test_most_edits_apply_live_but_capital_and_data_source_do_not(svc):
     svc.start_session(speed=1)
     try:
         svc.update_settings({"scanner": {"filters": {"min_pct_change": 9.0}}, "risk": {"max_positions": 2}})
@@ -99,8 +99,9 @@ def test_scanner_and_risk_edits_are_allowed_live_but_capital_and_costs_are_not(s
 
         with pytest.raises(ServiceError, match="starting_capital"):
             svc.update_settings({"risk": {"starting_capital": 5}})
-        with pytest.raises(ServiceError, match="costs"):
-            svc.update_settings({"costs": {"slippage_bps": 99}})
+        # costs are live: the very next fill uses them
+        svc.update_settings({"costs": {"slippage_bps": 99}})
+        assert svc.broker.costs.slippage_bps == 99
         with pytest.raises(ServiceError, match="data_mode"):
             svc.update_settings({"data_mode": "historical"})
     finally:
@@ -121,6 +122,10 @@ def test_service_mirrors_demo_orders_to_the_mock_venue(tmp_env, mock_site, monke
             s.mirror is not None
             and s.status()["execution_mode"] == "mock_browser"
             and s.status()["real_money"] is False
+        )
+        # the classic momentum strategies trade often enough on the demo day to exercise the mirror
+        s.update_changes(
+            {"strategies.enabled": ["opening_momentum", "gap_continuation", "momentum_breakout"]}
         )
         s.start_session(instant=True)
         s.wait_for_session(300)

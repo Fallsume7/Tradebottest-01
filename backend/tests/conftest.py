@@ -129,6 +129,11 @@ def session_info() -> SessionInfo:
 
 
 @pytest.fixture(scope="session")
+def sess(session_info: SessionInfo) -> SessionInfo:
+    return session_info
+
+
+@pytest.fixture(scope="session")
 def schedule(session_info):  # type: ignore[no-untyped-def]
     return build_schedule(TEST_DAY, AppSettings().schedule)
 

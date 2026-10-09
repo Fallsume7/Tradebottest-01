@@ -65,7 +65,10 @@ class PaperBroker(ExecutionAdapter):
         *,
         clock: Callable[[], datetime] = utcnow,
         store: BrokerStore | None = None,
+        supported_order_types: frozenset[str] | None = None,
     ) -> None:
+        # None = every type the engine implements; otherwise the game's allowed set (e.g. {"limit"})
+        self.supported_order_types = supported_order_types
         self.starting_cash = starting_cash
         self.cash = starting_cash
         self.costs = costs or CostConfig()
@@ -179,6 +182,10 @@ class PaperBroker(ExecutionAdapter):
         existing = self._by_client.get(req.client_order_id)
         if existing:
             return self.orders[existing]
+        if self.supported_order_types is not None and req.order_type.value not in self.supported_order_types:
+            return self._reject(
+                req, now, f"{req.order_type.value} orders are not supported by this game's rules"
+            )
         if req.quantity < 1 or int(req.quantity) != req.quantity:
             return self._reject(req, now, "quantity must be a positive whole number of shares")
         if req.order_type == OrderType.LIMIT and (req.limit_price is None or req.limit_price <= 0):
@@ -325,7 +332,14 @@ class PaperBroker(ExecutionAdapter):
                 max_hold_minutes=m.get("max_hold_minutes"),
                 high_water_mark=price,
                 reference=dict(m.get("reference", {})),
+                plan=dict(m.get("plan", {})),
+                mode=str(m.get("mode", "")),
+                entry_forecast=dict(m.get("forecast", {})),
+                deadline=when + timedelta(minutes=float(m["max_hold_minutes"]))
+                if m.get("max_hold_minutes")
+                else None,
             )
+            pos.initial_stop_price = pos.stop_price
             self.positions[o.symbol] = pos
         new_qty = pos.quantity + qty
         pos.avg_cost = (pos.avg_cost * pos.quantity + price * qty) / new_qty
@@ -369,6 +383,13 @@ class PaperBroker(ExecutionAdapter):
             entry_reason=pos.entry_reason,
             exit_reason=o.reason,
             session_date=self.session_date,
+            mode=pos.mode,
+            predicted_net_return_pct=pos.entry_forecast.get("expected_net_return_pct"),
+            predicted_p_positive=pos.entry_forecast.get("p_positive"),
+            predicted_p_target=pos.plan.get("p_target"),
+            planned_target_price=pos.plan.get("target_price"),
+            planned_stop_price=pos.plan.get("stop_price"),
+            forecast_calibrated=bool(pos.entry_forecast.get("calibrated", False)),
         )
         self.trades.append(trade)
         del self.positions[pos.symbol]

@@ -86,6 +86,8 @@ REGIME_MIX: list[tuple[str, int]] = [
     ("illiquid_spike", 3),
     ("halt", 1),
     ("downtrend", 2),
+    ("steady_uptrend", 3),
+    ("recovery", 3),
 ]
 
 
@@ -189,6 +191,24 @@ def _plan_for(regime: str, rng: np.random.Generator, n: int, pre_n: int, reg_n: 
         for _ in range(int(rng.integers(2, 5))):
             jumps[int(rng.integers(5, n - 5))] = rng.choice([-1, 1]) * rng.uniform(0.05, 0.14)
         jumps[int(rng.integers(t0 - 30, t0 + 60))] = rng.uniform(0.10, 0.25)
+    elif regime == "steady_uptrend":
+        # no big news, no gap: a quiet grinder that rises on rising volume (flat early, so it is NOT a top gainer)
+        if rng.random() < 0.3:
+            jumps[int(rng.integers(pre_n - 120, pre_n - 20))] = np.log1p(rng.uniform(0.005, 0.02))
+        drift[reg(0, reg_n)] = rng.uniform(0.00006, 0.00022)
+        volmult[reg(0, reg_n)] = rng.uniform(1.2, 1.8)
+        sigma[reg(0, reg_n)] *= 0.8
+    elif regime == "recovery":
+        # sells off after the open, bottoms, then (about half the time) recovers: reversal setup
+        drift[reg(0, 70)] = -rng.uniform(0.0003, 0.0006)
+        volmult[reg(0, 70)] = rng.uniform(1.5, 2.5)
+        bottom = int(rng.integers(70, 110))
+        drift[reg(bottom, bottom + 20)] = 0.0
+        if cont:
+            drift[reg(bottom + 20, bottom + 190)] = rng.uniform(0.0002, 0.0004)
+            volmult[reg(bottom + 20, bottom + 100)] = rng.uniform(1.6, 2.6)
+        else:
+            drift[reg(bottom + 20, bottom + 190)] = -rng.uniform(0.00005, 0.00015)
     elif regime == "downtrend":
         jumps[int(rng.integers(pre_n - 200, pre_n - 40))] = -np.log1p(rng.uniform(0.08, 0.20))
         volmult[pre_n - 120 : pre_n] = 3.0
@@ -299,11 +319,22 @@ def _make_symbol(
     ]
     df.index.name = "timestamp"
 
-    spread_bps = float(np.clip(18 + 40 / np.sqrt(max(adv, 1) / 1e5) + (60 if p0 < 1 else 0), 8, 400))
+    spread_bps = float(np.clip(7 + 25 / np.sqrt(max(adv, 1) / 1e5) + (50 if p0 < 1 else 0), 5, 400))
     if prof.illiquid:
         spread_bps = float(rng.uniform(250, 600))
+    # Pre-open "news" exists for names with a premarket jump, whatever happens afterwards (like real catalysts).
+    catalyst, sentiment = {
+        "gap_run": ("Announced a partnership (synthetic headline)", 0.6),
+        "gap_fade": ("Announced a partnership (synthetic headline)", 0.6),
+        "halt": ("Regulatory update pending (synthetic headline)", 0.3),
+        "breakout": ("Analyst upgrade (synthetic headline)", 0.4),
+        "opening_runner": ("Contract win reported (synthetic headline)", 0.4),
+        "downtrend": ("Guidance cut (synthetic headline)", -0.6),
+    }.get(regime, ("", 0.0))
     meta = StockMeta(
         symbol=symbol,
+        catalyst=catalyst,
+        catalyst_sentiment=sentiment if catalyst else None,
         name=f"{name} (synthetic)",
         prev_close=p0,
         avg_daily_volume=round(adv),
@@ -445,4 +476,11 @@ def write_sample_dataset(out_dir: Path, start: date, end: date, seed: int = 7, n
         "deterministic": True,
     }
     (out_dir / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    from mwbot.eligibility.csvio import export_csv
+    from mwbot.eligibility.demo import dataset_eligibility
+
+    symbols = sorted({str(r["symbol"]) for r in meta_rows})
+    (out_dir / "eligibility.csv").write_text(
+        export_csv(dataset_eligibility(symbols, dates)), encoding="utf-8"
+    )
     return out_dir

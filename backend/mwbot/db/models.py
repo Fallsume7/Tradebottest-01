@@ -135,3 +135,20 @@ class BacktestRow(Base):
     config: Mapped[Any] = mapped_column(JSON)
     summary: Mapped[Any] = mapped_column(JSON)
     result: Mapped[Any] = mapped_column(JSON)
+
+
+class EligibilityRow(Base):
+    """Append-only dated eligibility history (latest row with effective_from <= date wins)."""
+
+    __tablename__ = "eligibility"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    ticker: Mapped[str] = mapped_column(String(12), index=True)
+    effective_from: Mapped[str] = mapped_column(String(10), index=True)
+    status: Mapped[str] = mapped_column(String(24), index=True)
+    verified_on: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    name: Mapped[str] = mapped_column(String(120), default="")
+    exchange: Mapped[str] = mapped_column(String(30), default="")
+    security_type: Mapped[str] = mapped_column(String(30), default="")
+    rejection_reason: Mapped[str] = mapped_column(Text, default="")
+    restrictions: Mapped[str] = mapped_column(Text, default="")
+    source: Mapped[str] = mapped_column(String(60), default="manual")

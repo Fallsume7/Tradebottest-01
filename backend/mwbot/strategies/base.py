@@ -38,6 +38,7 @@ class SignalInput:
     metrics: StockMetrics
     scan: ScanResult | None
     minutes_since_open: float
+    opportunity: Any = None  # forecast.ranking.Opportunity for the predictive strategy
 
     def _split(self) -> int:
         return int(self.ctx.bars.index.searchsorted(pd.Timestamp(self.ctx.session.open_utc), side="left"))
@@ -63,6 +64,10 @@ class Evaluation:
     trailing_stop_pct: float | None = None
     max_hold_minutes: int | None = None
     reference: dict[str, float] = field(default_factory=dict)
+    plan: dict[str, Any] = field(
+        default_factory=dict
+    )  # trade plan (predictive strategy): target, stop, deadline...
+    forecast: dict[str, Any] = field(default_factory=dict)
 
     def explanation(self) -> str:
         ok = [c for c in self.conditions if c.passed]

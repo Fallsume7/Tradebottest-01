@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 from mwbot.api.app import create_app
 from mwbot.config import EnvSettings
 from mwbot.service import AppService
+from mwbot.strategies.builtin import STRATEGY_CLASSES
 
 
 @pytest.fixture()
@@ -99,7 +100,7 @@ def test_cannot_start_two_sessions_or_change_settings_mid_session(client, svc):
         r = client.post("/api/session/start", json={})
         assert r.status_code == 400 and "already running" in r.json()["detail"]
         r = client.put("/api/settings", json={"risk": {"starting_capital": 5}})
-        assert r.status_code == 400 and "Stop the running session" in r.json()["detail"]
+        assert r.status_code == 400 and "Stop the session" in r.json()["detail"]
     finally:
         client.post("/api/session/stop")
     assert client.get("/api/status").json()["session_status"] == "idle"
@@ -115,7 +116,7 @@ def test_step_through_a_session_manually(client, svc):
     assert (
         stock["bars"]
         and stock["evaluations"]
-        and len(stock["evaluations"]) == 5
+        and len(stock["evaluations"]) == len(STRATEGY_CLASSES)
         and "conditions" in stock["evaluations"][0]
     )
     assert client.get("/api/stocks/NOPE").status_code == 400
