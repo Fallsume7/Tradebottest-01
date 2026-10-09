@@ -1,6 +1,6 @@
 # Local setup on Windows (PowerShell)
 
-Tested in CI on Windows for the backend core; the full browser/dashboard flow was exercised on Linux in the cloud session. If anything differs on your machine, see *Troubleshooting* and tell Claude Code (CLAUDE.md explains the project).
+The CI workflow includes a Windows smoke job for the backend core; the full browser/dashboard flow was exercised only on Linux in the cloud session, so expect to fix small Windows differences. See *Troubleshooting*, and tell Claude Code (CLAUDE.md explains the project).
 
 ## 1. Prerequisites
 
@@ -25,8 +25,8 @@ git --version
 
 ```powershell
 cd $HOME\Documents
-git clone https://github.com/fallsume7/tradebottest-01.git
-cd tradebottest-01
+git clone https://github.com/Fallsume7/Tradebottest-01.git
+cd Tradebottest-01
 git checkout claude/marketwatchbot-build     # or main, once the PR is merged
 ```
 
@@ -107,4 +107,4 @@ powershell -File scripts\test.ps1 -SkipBrowser  # faster
 | Dashboard shows "Cannot reach the backend" | Backend not running / different port; with `npm run dev` set `$env:MWBOT_API="http://127.0.0.1:8010"` first |
 | Playwright can't find a browser | `python -m playwright install chromium`; or set `MWBOT_CHROMIUM_PATH` to a `chrome.exe` |
 | Blank dashboard at `/` | `frontend\dist` missing: `cd frontend; npm run build` |
-| Firewall prompt | Allow on *private* networks only; the server binds to 127.0.0.1 by default |
+| Firewall prompt | Allow on *private* networks only; the server binds to 127.0.0.1 by default. The API has **no authentication** — never bind it to 0.0.0.0 / expose it to a network |
