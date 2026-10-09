@@ -168,8 +168,7 @@ class AppService:
     # ------------------------------------------------------------------ settings
     def update_settings(self, patch: dict[str, Any]) -> AppSettings:
         with self.lock:
-            if self.session_status == "running":
-                raise ServiceError("Stop the running session before changing settings.")
+            running = self.session_status == "running"
             merged = _deep_merge(self.settings.model_dump(mode="json"), patch)
             try:
                 new = AppSettings.model_validate(merged)
@@ -177,6 +176,26 @@ class AppService:
                     build_strategy(sid, new.strategies.params.get(sid))
             except Exception as exc:
                 raise ServiceError(f"Invalid settings: {exc}") from exc
+            if running:
+                locked = [
+                    k
+                    for k in (
+                        "data_mode",
+                        "demo_seed",
+                        "historical_dataset",
+                        "schedule",
+                        "costs",
+                        "auto_schedule",
+                    )
+                    if getattr(new, k) != getattr(self.settings, k)
+                ]
+                if new.risk.starting_capital != self.settings.risk.starting_capital:
+                    locked.append("risk.starting_capital")
+                if locked:
+                    raise ServiceError(
+                        f"Stop the running session before changing: {', '.join(locked)}. "
+                        "Scanner, strategy and risk-limit changes are allowed live."
+                    )
             mode_changed = (
                 new.data_mode != self.settings.data_mode
                 or new.demo_seed != self.settings.demo_seed
@@ -469,7 +488,12 @@ class AppService:
             now = self._now()
             sched = self.runner.schedule if self.runner else None
             b = self.broker
-            start_eq = self.bot.stats.start_equity if self.bot.stats else b.equity()
+            if self.bot.stats:
+                start_eq = self.bot.stats.start_equity
+            elif self.last_report:  # session finished: keep showing that day's result
+                start_eq = float(self.last_report["start_equity"])
+            else:
+                start_eq = b.equity()
             return {
                 "bot_state": str(self.bot.state),
                 "session_status": self.session_status,
