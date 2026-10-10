@@ -402,6 +402,22 @@ FIELDS: list[FieldSpec] = [
         group="Account",
     ),
     _f(
+        "risk.capital_budget",
+        R,
+        "Most money the bot may use",
+        "The most virtual money the bot may have invested at once (open positions plus pending buys). Leave empty "
+        "to let it use the whole account. Position sizes and the percentage limits below are measured against "
+        "this amount. Positions already open are never sold just because you lowered it.",
+        "number",
+        min=100,
+        max=100_000_000,
+        step=1000,
+        unit="$",
+        nullable=True,
+        effect="new_trades",
+        group="Account",
+    ),
+    _f(
         "risk.max_position_pct",
         R,
         "Largest single position",

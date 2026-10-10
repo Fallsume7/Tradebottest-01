@@ -1,6 +1,6 @@
 # MarketWatch integration — local hand-off plan
 
-**Status: not integrated, by design.** The cloud session did not touch your Chrome profile, log into any account, or send any order to MarketWatch. What exists is the *seam*: an `ExecutionAdapter` interface, a fully working local virtual broker, and a Playwright adapter proven against a **mock** trading site. `mwbot/execution/marketwatch.py` is a skeleton whose methods raise `NotConfiguredError` and whose `check_session()` honestly reports "not configured". It contains **no selectors, no endpoints, no CAPTCHA handling and no private-API calls**, and none were invented.
+**Status: plumbing built, page layer not calibrated.** See `MARKETWATCH_AUTOMATION.md` for the how-to. `mwbot/execution/marketwatch.py` attaches to the user's own logged-in Chrome (dedicated profile, localhost DevTools port), enforces a marketwatch.com-only allowlist, stops on CAPTCHA / logged-out, has `read_only` / `prepare_only` / `live` stages, a persisted idempotency ledger and unknown-outcome recovery. What MarketWatch's pages look like is **not** known: `UncalibratedPages` raises `NotCalibratedError` until a page layer is built from pages the user saved. No selectors, endpoints, CAPTCHA handling or private-API calls exist or were invented. No MarketWatch page has been contacted by any test or by the assistant.
 
 The rest of the bot works without MarketWatch. This document lists exactly what remains.
 

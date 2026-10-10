@@ -29,6 +29,13 @@ class SessionExpiredError(ExecutionError):
     """The external session is no longer authenticated."""
 
 
+class MirrorSkipped(Exception):  # noqa: N818 - deliberately not an error: nothing went wrong
+    """The venue was deliberately NOT sent this order (e.g. read-only / prepare-only rollout stage).
+
+    The bot records a note and carries on; it does not alert or pause, because nothing failed.
+    """
+
+
 @dataclass(slots=True)
 class SessionStatus:
     adapter: str
@@ -111,6 +118,9 @@ def reconcile_holdings(internal: list[Holding], external: list[Holding]) -> Reco
 class ExecutionAdapter(ABC):
     name: ClassVar[str]
     is_real_money: ClassVar[bool] = False
+    # True for venues where orders are meaningful only against real market prices (the bot then refuses to
+    # mirror decisions made on synthetic or historical data).
+    requires_real_feed: ClassVar[bool] = False
 
     @abstractmethod
     def check_session(self) -> SessionStatus: ...

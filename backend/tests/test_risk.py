@@ -146,3 +146,55 @@ def test_daily_loss_limit_boundary():
     rm = RiskManager(RiskConfig(max_daily_loss_pct=3.0))
     assert not rm.daily_loss_breached(97_001, 100_000)
     assert rm.daily_loss_breached(97_000, 100_000)
+
+
+# ------------------------------------------------------------- capital budget
+def _entry(
+    rm: RiskManager, *, price: float = 10.0, equity: float = 100_000, cash: float = 100_000, deployed=0.0
+):
+    return rm.check_entry(
+        state=BotState.RUNNING,
+        phase=Phase.TRADING,
+        symbol="NEW",
+        strategy="s",
+        price=price,
+        stop_loss_pct=3.0,
+        equity=equity,
+        buying_power=cash,
+        positions={},
+        pending_buy_symbols=set(),
+        stats=DayStats(start_equity=equity),
+        feed_age_seconds=1.0,
+        feed_allows_trading=True,
+        deployed_value=deployed,
+    )
+
+
+def test_no_budget_means_whole_account():
+    d = _entry(RiskManager(RiskConfig(max_position_pct=10)))
+    assert d.approved and d.quantity == 1000  # 10% of $100k at $10
+
+
+def test_budget_scales_position_size_down():
+    d = _entry(RiskManager(RiskConfig(max_position_pct=10, capital_budget=20_000)))
+    assert d.approved and d.quantity == 200  # 10% of the $20k budget, not of the $100k account
+
+
+def test_budget_limits_total_deployed_money():
+    rm = RiskManager(RiskConfig(max_position_pct=50, capital_budget=10_000))
+    d = _entry(rm, deployed=8_000)
+    assert d.approved and d.quantity <= 198  # only $2,000 (less the cash buffer) of room left
+    assert d.quantity * 10.0 <= 2_000
+
+
+def test_budget_fully_used_blocks_entries_with_a_clear_reason():
+    d = _entry(RiskManager(RiskConfig(capital_budget=10_000)), deployed=10_000)
+    assert not d.approved and "capital budget" in d.reasons[0]
+    d2 = _entry(RiskManager(RiskConfig(capital_budget=10_000)), deployed=9_995, price=10.0)
+    assert not d2.approved  # less than one share of room
+
+
+def test_budget_larger_than_account_changes_nothing():
+    a = _entry(RiskManager(RiskConfig(max_position_pct=10, capital_budget=1_000_000)))
+    b = _entry(RiskManager(RiskConfig(max_position_pct=10)))
+    assert a.quantity == b.quantity

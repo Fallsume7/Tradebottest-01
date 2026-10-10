@@ -33,14 +33,46 @@ class EnvSettings(BaseSettings):
 
     historical_dir: str = "./backend/sample_data"
 
-    execution_mode: Literal["paper", "mock_browser"] = "paper"
+    execution_mode: Literal["paper", "mock_browser", "marketwatch"] = "paper"
     allow_real_money: bool = False
+
+    # --- MarketWatch virtual game (play money). The bot never sees your password: you log in yourself in a
+    # dedicated Chrome profile that was started with scripts\marketwatch_chrome.ps1; the bot attaches to it.
+    marketwatch_game_url: str = ""  # the game's own page, e.g. https://www.marketwatch.com/games/<your-game>
+    marketwatch_cdp_url: str = "http://127.0.0.1:9222"  # local Chrome debugging endpoint (localhost only)
+    # read_only: only read cash/holdings | prepare_only: fill the order form, never confirm | live: submit orders
+    marketwatch_stage: Literal["read_only", "prepare_only", "live"] = "read_only"
+    marketwatch_min_action_gap_s: float = (
+        2.0  # pause between page actions (keep within what your game allows)
+    )
+    autopilot: bool = False  # on start: enable the live-clock schedule so a trading day runs with no clicks
 
     mock_site_url: str = "http://127.0.0.1:8765"
     mock_site_user: str = "demo"
     mock_site_password: str = "demo"
 
     frontend_dist: str = ""
+
+    @field_validator("marketwatch_game_url")
+    @classmethod
+    def _game_url_is_marketwatch(cls, v: str) -> str:
+        if v:
+            from urllib.parse import urlparse
+
+            u = urlparse(v)
+            host = (u.hostname or "").lower()
+            if u.scheme != "https" or not (host == "marketwatch.com" or host.endswith(".marketwatch.com")):
+                raise ValueError("MWBOT_MARKETWATCH_GAME_URL must be an https://...marketwatch.com address")
+        return v
+
+    @field_validator("marketwatch_cdp_url")
+    @classmethod
+    def _cdp_is_local(cls, v: str) -> str:
+        from urllib.parse import urlparse
+
+        if (urlparse(v).hostname or "") not in {"127.0.0.1", "localhost", "::1"}:
+            raise ValueError("MWBOT_MARKETWATCH_CDP_URL must point at this computer (127.0.0.1 / localhost)")
+        return v
 
     @field_validator("allow_real_money")
     @classmethod
@@ -145,6 +177,8 @@ class RiskConfig(BaseModel):
     max_position_pct: float = Field(10.0, gt=0, le=100)  # of equity, per position
     risk_per_trade_pct: float = Field(0.5, gt=0, le=10)  # of equity risked to the stop
     max_position_value: float | None = Field(None, gt=0)  # $ cap per position (e.g. from game rules)
+    # Most virtual money the bot may have invested at once (positions + pending buys). None = whole account.
+    capital_budget: float | None = Field(None, gt=0)
     max_positions: int = Field(5, ge=1)
     max_daily_loss_pct: float = Field(3.0, gt=0)  # halts new entries; flatten if breached
     stop_loss_pct: float = Field(3.0, gt=0)  # default; strategies may override

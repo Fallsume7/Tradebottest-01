@@ -10,7 +10,6 @@ to any host other than the configured mock-site origin.
 
 from __future__ import annotations
 
-import functools
 import glob
 import logging
 import os
@@ -31,6 +30,7 @@ from mwbot.execution.base import (
     SessionExpiredError,
     SessionStatus,
 )
+from mwbot.execution.worker import on_worker
 
 log = logging.getLogger(__name__)
 
@@ -69,20 +69,7 @@ def _needs_no_sandbox() -> bool:
     return bool(os.environ.get("CI")) or (geteuid is not None and geteuid() == 0)
 
 
-def _on_worker(method):
-    """Run an adapter method on the adapter's dedicated browser thread.
-
-    Playwright's sync API is bound to the thread that started it. The bot calls adapters from its own
-    session thread (and the API from others), so every browser touch is funnelled to ONE worker thread.
-    """
-
-    @functools.wraps(method)
-    def wrapper(self, *args, **kwargs):
-        if threading.get_ident() == self._worker_ident:
-            return method(self, *args, **kwargs)
-        return self._pool.submit(method, self, *args, **kwargs).result()
-
-    return wrapper
+_on_worker = on_worker
 
 
 class MockBrowserAdapter(ExecutionAdapter):

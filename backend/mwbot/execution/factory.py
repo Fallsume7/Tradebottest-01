@@ -26,4 +26,22 @@ def create_adapter(env: EnvSettings) -> ExecutionAdapter:
         assert_virtual_only(ad)
         ad.ensure_logged_in()
         return ad
+    if env.execution_mode == "marketwatch":
+        from pathlib import Path
+
+        from mwbot.execution.marketwatch import MarketWatchAdapter
+
+        if not env.marketwatch_game_url:
+            raise ExecutionError("set MWBOT_MARKETWATCH_GAME_URL to your game's address first")
+        data = Path(env.data_dir)
+        mw = MarketWatchAdapter(
+            env.marketwatch_game_url,
+            cdp_url=env.marketwatch_cdp_url,
+            stage=env.marketwatch_stage,
+            ledger_path=data / "marketwatch_ledger.json",
+            shots_dir=data / "marketwatch_shots",
+            min_action_gap_s=env.marketwatch_min_action_gap_s,
+        )
+        assert_virtual_only(mw)
+        return mw
     raise ExecutionError("execution mode 'paper' uses the internal broker; no external adapter to create")

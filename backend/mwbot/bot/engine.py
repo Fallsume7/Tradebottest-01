@@ -30,7 +30,7 @@ from mwbot.domain import (
 )
 from mwbot.eligibility.models import EligibilityStatus
 from mwbot.eligibility.universe import EligibilityUniverse
-from mwbot.execution.base import ExecutionAdapter, ExecutionError
+from mwbot.execution.base import ExecutionAdapter, ExecutionError, MirrorSkipped
 from mwbot.forecast.features import MarketState, market_state
 from mwbot.forecast.models import Forecaster
 from mwbot.forecast.ranking import Opportunity, OpportunityRanker
@@ -316,6 +316,16 @@ class TradingBot:
 
     def _feed_gate(self, source: MarketDataSource) -> tuple[bool, str]:
         fi = source.feed_info()
+        if (
+            self.mirror is not None
+            and self.mirror.requires_real_feed
+            and fi.kind in (FeedKind.SYNTHETIC, FeedKind.HISTORICAL)
+        ):
+            return (
+                False,
+                f"feed is {fi.kind.value.upper()}: refusing to send orders to {self.mirror.name} "
+                "(needs a real market-data feed)",
+            )
         if fi.kind == FeedKind.DELAYED and not self.settings.allow_delayed_feed_trading:
             return (
                 False,
@@ -819,6 +829,7 @@ class TradingBot:
                 feed_age_seconds=source.feed_age_seconds(now),
                 feed_allows_trading=allowed,
                 feed_block_reason=why,
+                deployed_value=self.broker.deployed_value(),
             )
             if block or not decision.approved:
                 why_not = block or "; ".join(decision.reasons)
@@ -961,6 +972,13 @@ class TradingBot:
             self._note(
                 "mirror",
                 f"Mirrored {req.side.value} {req.quantity} {req.symbol} to {self.mirror.name}: {ext.status}",
+                now=now,
+                symbol=req.symbol,
+            )
+        except MirrorSkipped as skip:
+            self._note(
+                "mirror",
+                f"{self.mirror.name}: {req.side.value} {req.quantity} {req.symbol} NOT sent - {skip}",
                 now=now,
                 symbol=req.symbol,
             )

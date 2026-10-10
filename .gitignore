@@ -46,3 +46,6 @@ coverage/
 Thumbs.db
 .idea/
 .vscode/
+
+# Saved MarketWatch pages (contain personal data) - never commit
+marketwatch_snapshots/

@@ -209,12 +209,17 @@ class AppService:
             log.warning("data provider unavailable", extra={"mode": mode, "error": self.provider_error})
 
     def _build_mirror(self) -> None:
-        if self.env.execution_mode == "mock_browser":
+        if self.env.execution_mode in ("mock_browser", "marketwatch"):
             from mwbot.execution.factory import create_adapter
 
             try:
                 self.mirror = create_adapter(self.env)
                 self.bot.mirror = self.mirror
+                if self.env.execution_mode == "marketwatch":
+                    st = self.mirror.check_session()
+                    log.info("marketwatch session", extra={"logged_in": st.logged_in, "detail": st.detail})
+                    if not st.logged_in:
+                        self.bot._alert("warning", "marketwatch_session", st.detail, utcnow())
             except Exception as exc:  # adapter is optional; surface but do not crash
                 self.bot.mirror = None
                 self.mirror = None
@@ -667,6 +672,17 @@ class AppService:
 
     # ------------------------------------------------------------------ scheduler (live clock)
     def start_scheduler(self) -> None:
+        if self.env.autopilot and not self.settings.auto_schedule:
+            self.update_settings({"auto_schedule": True})
+            log.info("autopilot: live-clock schedule switched on")
+        if self.env.autopilot and self.settings.data_mode != "connected":
+            self.bot._alert(
+                "warning",
+                "autopilot_no_live_data",
+                "Autopilot is on but data mode is not Connected: there is no real market data to trade on, "
+                "so no orders will be placed.",
+                utcnow(),
+            )
         if self.scheduler is None:
             self.scheduler = BackgroundScheduler(timezone=CHICAGO)
             self.scheduler.start()

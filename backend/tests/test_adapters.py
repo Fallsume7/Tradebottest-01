@@ -1,4 +1,4 @@
-"""Adapter safety, the MarketWatch skeleton, and the mock trading site's HTTP behaviour (no browser)."""
+"""Adapter safety, the uncalibrated MarketWatch adapter, and the mock trading site's HTTP behaviour (no browser)."""
 
 import pytest
 from fastapi.testclient import TestClient
@@ -8,25 +8,38 @@ from mwbot.config import EnvSettings
 from mwbot.domain import OrderRequest, Side
 from mwbot.execution.base import ExecutionAdapter, ExecutionError
 from mwbot.execution.factory import assert_virtual_only, create_adapter
-from mwbot.execution.marketwatch import MarketWatchAdapter, NotConfiguredError
+from mwbot.execution.marketwatch import MarketWatchAdapter, NotCalibratedError
 from mwbot.execution.mock_browser import MockBrowserAdapter
 from mwbot.mocksite.app import create_mock_app
 from mwbot.mocksite.exchange import MockExchange
 
 
-def test_marketwatch_skeleton_does_nothing_and_says_so():
-    a = MarketWatchAdapter()
+class _Page:
+    url = "about:blank"
+
+    def goto(self, url: str) -> None:
+        self.url = url
+
+    def screenshot(self, path: str) -> None: ...
+
+
+def test_uncalibrated_marketwatch_adapter_refuses_to_guess_and_says_so():
+    """Until the page layout has been learned from the user's saved pages, nothing may act on MarketWatch."""
+    game = "https://www.marketwatch.com/games/test"
+    a = MarketWatchAdapter(game, stage="live", page_provider=_Page, min_action_gap_s=0)
     st = a.check_session()
-    assert st.logged_in is False and "not configured" in st.detail
+    assert st.logged_in is False and "not calibrated" in st.detail
     for call in (
         a.get_buying_power,
         a.get_holdings,
-        lambda: a.prepare_order(OrderRequest("x", "A", Side.BUY, 1)),
-        lambda: a.cancel_order("1"),
         lambda: a.get_order_status("1"),
+        lambda: a.cancel_order("1"),
     ):
-        with pytest.raises(NotConfiguredError, match="MARKETWATCH_INTEGRATION"):
+        with pytest.raises(NotCalibratedError, match="not calibrated"):
             call()
+    with pytest.raises(NotCalibratedError, match="not calibrated"):
+        a.prepare_order(OrderRequest("x", "A", Side.BUY, 1))
+    a.close()
 
 
 def test_factory_refuses_real_money_adapters():
@@ -52,7 +65,9 @@ def test_factory_paper_mode_has_no_external_adapter():
     with pytest.raises(ExecutionError, match="internal broker"):
         create_adapter(EnvSettings(_env_file=None, execution_mode="paper"))
     with pytest.raises(ValidationError):
-        EnvSettings(_env_file=None, execution_mode="marketwatch")  # not a selectable mode
+        EnvSettings(_env_file=None, execution_mode="real_money")  # no such mode exists
+    with pytest.raises(ExecutionError, match="GAME_URL"):  # marketwatch mode needs the game's address
+        create_adapter(EnvSettings(_env_file=None, execution_mode="marketwatch"))
 
 
 def test_browser_adapter_only_talks_to_local_hosts():

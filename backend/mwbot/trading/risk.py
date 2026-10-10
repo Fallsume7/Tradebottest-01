@@ -105,6 +105,7 @@ class RiskManager:
         feed_age_seconds: float,
         feed_allows_trading: bool,
         feed_block_reason: str = "",
+        deployed_value: float = 0.0,
     ) -> RiskDecision:
         reasons: list[str] = []
         if state != BotState.RUNNING:
@@ -131,6 +132,16 @@ class RiskManager:
             reasons.append("already traded this symbol with this strategy today")
         if price <= 0:
             reasons.append("invalid price")
+        budget = self.cfg.capital_budget
+        if budget is not None:
+            room = budget - deployed_value
+            if room < price:
+                reasons.append(
+                    f"capital budget ${budget:,.0f} fully used (${max(deployed_value, 0):,.0f} invested)"
+                )
+            # Percent limits and sizing are measured against the budget, not the whole account
+            equity = min(equity, budget)
+            buying_power = min(buying_power, max(room, 0.0))
         if reasons:
             return RiskDecision(False, 0, reasons)
         qty, breakdown = size_position(equity, price, stop_loss_pct, self.cfg, buying_power)

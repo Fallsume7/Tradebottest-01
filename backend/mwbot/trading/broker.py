@@ -104,6 +104,11 @@ class PaperBroker(ExecutionAdapter):
     def buying_power(self) -> float:
         return max(self.cash - self.reserved_cash(), 0.0)
 
+    def deployed_value(self) -> float:
+        """Virtual money currently invested: open positions at their marks plus cash reserved for pending buys."""
+        held = sum(p.quantity * self.marks.get(p.symbol, p.avg_cost) for p in self.positions.values())
+        return held + self.reserved_cash()
+
     def unrealized_pnl(self) -> float:
         return sum(
             p.quantity * (self.marks.get(p.symbol, p.avg_cost) - p.avg_cost) for p in self.positions.values()

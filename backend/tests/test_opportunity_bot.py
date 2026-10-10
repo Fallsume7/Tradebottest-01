@@ -82,6 +82,7 @@ def run(
     hook: Callable[[SessionRunner, TradingBot], None] | None = None,
     halts: dict | None = None,
     stop_at_minute: float | None = None,
+    mirror: object | None = None,
 ):
     settings = settings or settings_for()
     sess = session_for(TEST_DAY)
@@ -89,7 +90,13 @@ def run(
     src = make_source(sess, {s: (meta(s), b) for s, b in bars.items()}, halts=halts)
     broker = PaperBroker(settings.risk.starting_capital, settings.costs)
     uni = elig or universe(*[(s, T) for s in bars])
-    bot = TradingBot(settings, broker, eligibility=uni, forecaster=forecaster or ScriptedForecaster())
+    bot = TradingBot(
+        settings,
+        broker,
+        mirror=mirror,
+        eligibility=uni,
+        forecaster=forecaster or ScriptedForecaster(),  # type: ignore[arg-type]
+    )
     bot.start()
     sched = build_schedule(TEST_DAY, settings.schedule)
     runner = SessionRunner(bot, src, sched)
